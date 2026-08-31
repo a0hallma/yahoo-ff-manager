@@ -1,0 +1,150 @@
+Perform my complete weekly fantasy football roster audit.
+
+Use my actual league settings, current roster, and available-player data.
+
+Research current 2026 information before making recommendations.
+
+Before making any schedule-related recommendation:
+- Call get_roster_schedule.
+- Call get_next_roster_lock.
+- Treat those results as authoritative for opponent, game date, kickoff time, and the next roster lock.
+- Do not reconstruct the NFL schedule from memory or general web research.
+
+For every relevant roster player, verify:
+- Current NFL team
+- Injury designation
+- Latest practice participation
+- Expected Week role
+- NFL opponent
+- Game day and kickoff timing
+- Material depth-chart or transaction changes
+
+Pay particular attention to players whose games occur before Sunday.
+Do not leave a questionable Thursday player in a starting slot without
+explaining the contingency plan.
+
+The goal is to optimize my starting roster to produce a win over my opponent based on the best, most recent, most accurate information.
+
+Produce the report in these sections:
+The WEEKLY LINEUP section is generated separately from a Python-validated
+structured lineup.
+
+Do not output Section 1.
+
+Begin your response with:
+
+## 2. EARLY-GAME LOCKS
+
+Use the authoritative validated lineup supplied with this prompt for all
+subsequent analysis.
+
+
+2. EARLY-GAME LOCKS
+
+Identify every roster player whose NFL game occurs before the main Sunday 1:00 PM Eastern slate.
+
+This can include Wednesday, Thursday, Friday, Saturday, Sunday morning international games, Thanksgiving, Christmas, or other special NFL scheduling.
+
+For each affected player provide:
+- Player
+- Opponent
+- Game date
+- Kickoff time Eastern
+- START, BENCH, or MONITOR
+- Exact action required before that player's game locks
+
+Identify the single earliest upcoming kickoff involving anyone on my roster and label it:
+
+NEXT ROSTER LOCK:
+<date and time>
+
+Do not assume Thursday is the first relevant game.
+
+Clearly tell me whether each should be STARTED, BENCHED, or MONITORED
+before his game locks.
+
+3. INJURY REPORT
+Rank injury situations:
+CRITICAL
+WATCH
+LOW CONCERN
+
+Use the newest credible information available.
+Do not treat a Yahoo questionable designation alone as sufficient evidence.
+For every player labeled CRITICAL or MONITOR whose status could change the starting lineup:
+
+- Give the exact contingency if that player is inactive.
+- The contingency must produce a complete legal lineup.
+- Account for the kickoff times of all possible replacement players.
+- Do not refer to a generic Sunday lineup deadline; use each player's actual lock time.
+For any questionable or uncertain starter who plays after the main Sunday 1:00 PM Eastern slate:
+
+- Call get_lock_aware_player_pool using the player's slot in the authoritative validated lineup.
+- State whether an on-roster late replacement actually exists.
+- If none exists, identify any current free-agent emergency option that would still be unlocked.
+- If FLEX placement would materially improve the available contingency pool, explain that option.
+- Do not use vague language such as "have a replacement ready" without identifying the exact replacement.
+
+4. MATCHUP AND ROLE NOTES
+Only identify matchup or workload information that is material enough
+to affect a fantasy decision.
+
+Do not manufacture projected touches, targets, snap percentages, or usage.
+
+5. ROSTER MOVES
+Use get_available_players before recommending any specific addition.
+
+Identify:
+- Players worth adding
+- Exact player I would drop
+- Whether the move requires using waiver priority
+- Whether the upgrade is significant enough to justify using that priority
+
+If no worthwhile move exists, explicitly recommend doing nothing.
+
+6. ROSTER CONSTRUCTION
+Identify:
+- Excess positional depth
+- Weak positional depth
+- Bye-week problems
+- IR opportunities
+- Players whose roster spot is becoming expendable
+
+7. SUNDAY WATCH LIST
+List only the situations that need to be checked again Sunday morning.
+
+8. TRADE OPPORTUNITIES	
+Review the other rosters on my teams and explore any potential trade suggestions, grounded in what is actually happening in the wider fantasy football community.  Only recommend trades if there is an honest chance the human controlling the other roster would view as a fair trade and be actually willing to accept the trade.
+-Be prepared to explain the justification and reasoning for the trade.
+-Think about the near, mid, and long term benefits of executing a trade.
+-Do not recommend trade opportunities if no worthwhile trade opportunities exist.  In this scenario, state there are no trades worth exploring this week.
+
+9. ACTION PLAN
+Finish with a concise ordered checklist:
+
+DO NOW:
+1.
+2.
+
+BEFORE NEXT EARLY KICKOFF:
+List actions required before the earliest upcoming game involving one of my rostered players and state which day and time the earliest game is for the upcoming NFL week #.
+1.
+2.
+
+CHECK SUNDAY:
+1.
+2.
+
+If there are no actions in one category, say NONE.
+
+Do not make a change merely for the sake of making a change.
+Preserving roster value and waiver priority is a valid recommendation.
+
+FORMAT RULES
+- Use exactly the eight numbered sections requested above.
+- Do not add additional numbered sections.
+- If trade analysis is relevant, mention it within ROSTER CONSTRUCTION or ROSTER MOVES.
+- ACTION PLAN must always be section 9.
+- Output exactly Sections 2 through 9.
+- Do not output Section 1. Python renders Section 1 separately.
+- ACTION PLAN must remain Section 9.

@@ -1,55 +1,82 @@
 from dotenv import load_dotenv
-from agents import Agent, Runner, WebSearchTool
+from agents import (
+    Agent,
+    Runner,
+    WebSearchTool,
+    SQLiteSession,
+    RunConfig,
+    SessionSettings,
+)
+
+from league_tools import get_league_settings
+from roster_tools import get_my_roster
+from waiver_tools import get_available_players, get_available_player_summary
+from schedule_tools import get_roster_schedule, get_next_roster_lock
+from lineup_tools import validate_lineup
+from contingency_tools import get_lock_aware_player_pool
+
 
 load_dotenv()
 
-FANTASY_GM_INSTRUCTIONS = """
-You are my season-long fantasy football general manager.
-
-Primary objective:
-Maximize my probability of winning the league championship.
-
-Operating principles:
-- Base recommendations on my actual league settings and roster whenever available.
-- Use current NFL information when injuries, depth charts, suspensions, roles, or news matter.
-- Distinguish weekly value from rest-of-season value.
-- Consider positional scarcity, replacement value, bye weeks, playoff schedule, and roster construction.
-- Do not recommend dropping a valuable player for a marginal short-term gain.
-- For waiver recommendations, include a suggested FAAB bid when applicable.
-- Be decisive. Do not merely list options when one option is materially better.
-
-When recommending an action, use this format:
-
-ACTION:
-<exact action>
-
-WHY:
-<brief reasoning>
-
-CONFIDENCE:
-Low / Medium / High
-
-If information is missing that materially affects the recommendation, say exactly what is missing.
-"""
+with open("gm_instructions.txt", "r", encoding="utf-8") as f:
+    FANTASY_GM_INSTRUCTIONS = f.read()
 
 agent = Agent(
     name="Yahoo Fantasy GM",
     instructions=FANTASY_GM_INSTRUCTIONS,
     model="gpt-5.6-luna",
     tools=[
-        WebSearchTool()
+        get_league_settings,
+        get_my_roster,
+        get_available_players,
+        get_available_player_summary,
+        get_roster_schedule,
+        get_next_roster_lock,
+        get_lock_aware_player_pool,
+        validate_lineup,
+        WebSearchTool(),
     ],
+)
+
+session = SQLiteSession(
+    session_id="fantasy_gm_2026",
+    db_path="data/fantasy_gm_history.db",
 )
 
 print("Yahoo Fantasy GM is online.")
 print("Type 'quit' to exit.\n")
 
 while True:
-    user_input = input("You: ").strip()
+    print("\nYou:")
+    print("(Enter your request. Type END on its own line when finished.)")
+
+    lines = []
+
+    while True:
+        line = input()
+
+        if line.strip().upper() == "END":
+            break
+
+        lines.append(line)
+
+    user_input = "\n".join(lines).strip()
 
     if user_input.lower() in {"quit", "exit"}:
         break
 
-    result = Runner.run_sync(agent, user_input)
+    if not user_input:
+        continue
+
+    result = Runner.run_sync(
+    agent,
+    user_input,
+    session=session,
+    run_config=RunConfig(
+        session_settings=SessionSettings(
+            limit=12
+        )
+    ),
+)
 
     print(f"\nFantasy GM:\n{result.final_output}\n")
