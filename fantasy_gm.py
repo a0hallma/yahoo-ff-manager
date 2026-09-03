@@ -14,6 +14,7 @@ from waiver_tools import get_available_players, get_available_player_summary
 from schedule_tools import get_roster_schedule, get_next_roster_lock
 from lineup_tools import validate_lineup
 from contingency_tools import get_lock_aware_player_pool
+from transaction_tools import validate_add_drop
 
 
 load_dotenv()
@@ -34,6 +35,7 @@ agent = Agent(
         get_next_roster_lock,
         get_lock_aware_player_pool,
         validate_lineup,
+        validate_add_drop,
         WebSearchTool(),
     ],
 )
