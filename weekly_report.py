@@ -1,4 +1,4 @@
-import argparse
+﻿import argparse
 import json
 from pathlib import Path
 
@@ -31,6 +31,9 @@ from contingency_planner import build_all_validated_contingencies
 from injury_researcher import build_injury_research_snapshot
 from contingency_renderer import render_validated_contingencies
 from trade_renderer import render_validated_trade_section
+from sleeper.live_refresh import (
+    refresh_sleeper_acquisition_snapshot,
+)
 from league_roster_tools import (
     build_league_roster_summary,
 )
@@ -660,6 +663,70 @@ def main():
         f"Fantasy provider: "
         f"{provider_name} ({provider})"
     )
+
+    if provider == "sleeper":
+        print()
+        print(
+            "Refreshing live Sleeper data..."
+        )
+
+        try:
+            sleeper_refresh = (
+                refresh_sleeper_acquisition_snapshot()
+            )
+
+        except Exception as exc:
+            print(
+                "SLEEPER REFRESH: FAIL - "
+                f"{exc}"
+            )
+            print(
+                "Weekly report cancelled because live "
+                "Sleeper acquisition data could not be "
+                "refreshed."
+            )
+            raise SystemExit(1)
+
+        counts = (
+            sleeper_refresh.get(
+                "availability_counts",
+                {},
+            )
+        )
+
+        print(
+            "SLEEPER REFRESH: PASS "
+            f"(FA={counts.get('FA', 0)}, "
+            f"W={counts.get('W', 0)}, "
+            f"LOCKED={counts.get('LOCKED', 0)}, "
+            f"UNKNOWN={counts.get('UNKNOWN', 0)})"
+        )
+
+        schedule_errors = (
+            sleeper_refresh.get(
+                "schedule_errors",
+                [],
+            )
+        )
+
+        transaction_errors = (
+            sleeper_refresh.get(
+                "transaction_errors",
+                [],
+            )
+        )
+
+        if schedule_errors:
+            print(
+                "SLEEPER REFRESH WARNING: "
+                f"schedule errors: {schedule_errors}"
+            )
+
+        if transaction_errors:
+            print(
+                "SLEEPER REFRESH WARNING: "
+                f"transaction errors: {transaction_errors}"
+            )
 
     print()
     print(
