@@ -1,4 +1,4 @@
-import json
+﻿import json
 from collections import Counter
 
 from agents import function_tool
@@ -7,9 +7,15 @@ from provider_context import (
     get_current_provider,
     get_provider_display_name,
 )
-from league_tools import load_league_settings
-from roster_tools import load_roster
-from waiver_tools import load_available_players
+from league_tools import (
+    load_league_settings,
+)
+from roster_tools import (
+    load_roster,
+)
+from waiver_tools import (
+    load_available_players,
+)
 
 
 def normalize_name(name):
@@ -25,6 +31,83 @@ def load_current_roster_data():
     return load_roster()
 
 
+def build_blocked_transaction(
+    provider,
+    provider_name,
+    add,
+    drop,
+    reason,
+    error,
+    warnings=None,
+):
+    warnings = warnings or []
+
+    return {
+        "provider": provider,
+        "provider_name": (
+            provider_name
+        ),
+        "is_valid": False,
+        "transaction_blocked": True,
+        "transaction_executable": False,
+        "acquisition_state_confirmed": False,
+        "block_reason": reason,
+        "add": (
+            {
+                "name": add.get(
+                    "name"
+                ),
+                "position": add.get(
+                    "position"
+                ),
+                "nfl_team": add.get(
+                    "nfl_team"
+                ),
+                "availability": add.get(
+                    "availability"
+                ),
+                "acquisition_reason": add.get(
+                    "acquisition_reason"
+                ),
+                "acquisition_state_confirmed": (
+                    add.get(
+                        "acquisition_state_confirmed"
+                    )
+                ),
+                "immediately_addable": (
+                    add.get(
+                        "immediately_addable"
+                    )
+                ),
+                "waiver_date": add.get(
+                    "waiver_date"
+                ),
+            }
+            if add
+            else None
+        ),
+        "drop": (
+            {
+                "name": drop.get(
+                    "name"
+                ),
+                "position": drop.get(
+                    "position"
+                ),
+                "nfl_team": drop.get(
+                    "nfl_team"
+                ),
+            }
+            if drop
+            else None
+        ),
+        "errors": [
+            error
+        ],
+        "warnings": warnings,
+    }
+
+
 def validate_transaction(
     add_player,
     drop_player,
@@ -34,43 +117,64 @@ def validate_transaction(
     the currently selected fantasy provider.
 
     Yahoo:
-      FA and W are known acquisition states.
+      FA and W are provider-confirmed acquisition states.
 
     Sleeper:
-      UNROSTERED proves only that the player is not currently
-      owned. Until addability/waiver state is established,
-      Python must not certify the transaction as executable.
+      FA = confirmed immediately addable.
+      W  = confirmed waiver-claim candidate.
+      LOCKED and UNKNOWN cannot be recommended as executable.
     """
 
-    provider = get_current_provider()
-    provider_name = get_provider_display_name()
+    provider = (
+        get_current_provider()
+    )
 
-    roster = load_current_roster_data()
-    available = load_available_players()
-    league = load_league_settings()
+    provider_name = (
+        get_provider_display_name()
+    )
+
+    roster = (
+        load_current_roster_data()
+    )
+
+    available = (
+        load_available_players()
+    )
+
+    league = (
+        load_league_settings()
+    )
 
     roster_players = roster.get(
         "players",
         [],
     )
 
-    available_players = available.get(
-        "players",
-        [],
+    available_players = (
+        available.get(
+            "players",
+            [],
+        )
     )
 
     roster_index = {
         normalize_name(
-            player["name"]
+            player[
+                "name"
+            ]
         ): player
-        for player in roster_players
+        for player
+        in roster_players
     }
 
     available_index = {
         normalize_name(
-            player["name"]
+            player[
+                "name"
+            ]
         ): player
-        for player in available_players
+        for player
+        in available_players
     }
 
     add_key = normalize_name(
@@ -127,9 +231,12 @@ def validate_transaction(
     if errors:
         return {
             "provider": provider,
-            "provider_name": provider_name,
+            "provider_name": (
+                provider_name
+            ),
             "is_valid": False,
             "transaction_blocked": False,
+            "transaction_executable": False,
             "errors": errors,
             "warnings": warnings,
         }
@@ -137,6 +244,8 @@ def validate_transaction(
     availability = add.get(
         "availability"
     )
+
+    transaction_mode = None
 
     # ---------------------------------------------------------
     # Provider-specific acquisition validation
@@ -147,100 +256,180 @@ def validate_transaction(
             "FA",
             "W",
         }:
-            return {
-                "provider": provider,
-                "provider_name": provider_name,
-                "is_valid": False,
-                "transaction_blocked": True,
-                "block_reason": (
-                    "Yahoo acquisition state is not recognized."
+            return build_blocked_transaction(
+                provider=provider,
+                provider_name=provider_name,
+                add=add,
+                drop=drop,
+                reason=(
+                    "unsupported_yahoo_acquisition_state"
                 ),
-                "errors": [
-                    (
-                        f"{add['name']} has unsupported Yahoo "
-                        f"availability state: {availability}"
-                    )
-                ],
-                "warnings": warnings,
-            }
+                error=(
+                    f"{add['name']} has unsupported Yahoo "
+                    f"availability state: {availability}"
+                ),
+                warnings=warnings,
+            )
 
         acquisition_state_confirmed = True
         transaction_executable = True
 
-    elif provider == "sleeper":
-        if availability != "UNROSTERED":
-            return {
-                "provider": provider,
-                "provider_name": provider_name,
-                "is_valid": False,
-                "transaction_blocked": True,
-                "block_reason": (
-                    "Sleeper acquisition state is not recognized."
-                ),
-                "errors": [
-                    (
-                        f"{add['name']} has unsupported Sleeper "
-                        f"availability state: {availability}"
-                    )
-                ],
-                "warnings": warnings,
-            }
+        if availability == "FA":
+            transaction_mode = (
+                "free_agent_add"
+            )
+        else:
+            transaction_mode = (
+                "waiver_claim"
+            )
 
-        return {
-            "provider": provider,
-            "provider_name": provider_name,
-            "is_valid": False,
-            "transaction_blocked": True,
-            "transaction_executable": False,
-            "acquisition_state_confirmed": False,
-            "block_reason": (
-                "Sleeper confirms that the player is unrostered, "
-                "but immediate addability versus waivers has not "
-                "yet been established."
-            ),
-            "add": {
-                "name": add["name"],
-                "position": add["position"],
-                "nfl_team": add.get(
-                    "nfl_team"
-                ),
-                "availability": availability,
-                "waiver_date": add.get(
-                    "waiver_date"
-                ),
-            },
-            "drop": {
-                "name": drop["name"],
-                "position": drop["position"],
-                "nfl_team": drop.get(
-                    "nfl_team"
-                ),
-            },
-            "errors": [],
-            "warnings": [
+            warnings.append(
                 (
-                    "Do not present this Sleeper add/drop "
-                    "as executable until acquisition state "
-                    "is verified."
+                    "This transaction represents a waiver "
+                    "claim. Submission is possible, but the "
+                    "player is not guaranteed to be awarded."
                 )
-            ],
+            )
+
+    elif provider == "sleeper":
+        supported_states = {
+            "FA",
+            "W",
+            "LOCKED",
+            "UNKNOWN",
         }
 
+        if (
+            availability
+            not in supported_states
+        ):
+            return build_blocked_transaction(
+                provider=provider,
+                provider_name=provider_name,
+                add=add,
+                drop=drop,
+                reason=(
+                    "unsupported_sleeper_acquisition_state"
+                ),
+                error=(
+                    f"{add['name']} has unsupported Sleeper "
+                    f"availability state: {availability}"
+                ),
+                warnings=warnings,
+            )
+
+        confirmed = add.get(
+            "acquisition_state_confirmed",
+            False,
+        )
+
+        if availability == "UNKNOWN":
+            return build_blocked_transaction(
+                provider=provider,
+                provider_name=provider_name,
+                add=add,
+                drop=drop,
+                reason=(
+                    "unverified_sleeper_acquisition_state"
+                ),
+                error=(
+                    f"{add['name']}'s Sleeper acquisition "
+                    "state could not be confirmed."
+                ),
+                warnings=warnings,
+            )
+
+        if availability == "LOCKED":
+            return build_blocked_transaction(
+                provider=provider,
+                provider_name=provider_name,
+                add=add,
+                drop=drop,
+                reason=(
+                    "sleeper_acquisition_locked"
+                ),
+                error=(
+                    f"{add['name']} is currently locked "
+                    "for acquisition in Sleeper."
+                ),
+                warnings=warnings,
+            )
+
+        if confirmed is not True:
+            return build_blocked_transaction(
+                provider=provider,
+                provider_name=provider_name,
+                add=add,
+                drop=drop,
+                reason=(
+                    "unverified_sleeper_acquisition_state"
+                ),
+                error=(
+                    f"{add['name']}'s Sleeper acquisition "
+                    "state is not deterministically confirmed."
+                ),
+                warnings=warnings,
+            )
+
+        if availability == "FA":
+            if (
+                add.get(
+                    "immediately_addable"
+                )
+                is not True
+            ):
+                return build_blocked_transaction(
+                    provider=provider,
+                    provider_name=provider_name,
+                    add=add,
+                    drop=drop,
+                    reason=(
+                        "inconsistent_sleeper_free_agent_state"
+                    ),
+                    error=(
+                        f"{add['name']} reports FA but is "
+                        "not confirmed immediately addable."
+                    ),
+                    warnings=warnings,
+                )
+
+            acquisition_state_confirmed = True
+            transaction_executable = True
+            transaction_mode = (
+                "free_agent_add"
+            )
+
+        elif availability == "W":
+            acquisition_state_confirmed = True
+            transaction_executable = True
+            transaction_mode = (
+                "waiver_claim"
+            )
+
+            warnings.append(
+                (
+                    "Sleeper confirms this player is on "
+                    "waivers. This recommendation represents "
+                    "a waiver claim, not an immediate add, "
+                    "and successful acquisition is not guaranteed."
+                )
+            )
+
     else:
-        return {
-            "provider": provider,
-            "provider_name": provider_name,
-            "is_valid": False,
-            "transaction_blocked": True,
-            "transaction_executable": False,
-            "acquisition_state_confirmed": False,
-            "block_reason": (
+        return build_blocked_transaction(
+            provider=provider,
+            provider_name=provider_name,
+            add=add,
+            drop=drop,
+            reason=(
+                "unsupported_provider_transaction_semantics"
+            ),
+            error=(
                 "Provider-specific transaction semantics "
                 "have not been established."
             ),
-            "errors": [],
-            "warnings": warnings,
-        }
+            warnings=warnings,
+        )
 
     # ---------------------------------------------------------
     # Resulting roster structure
@@ -248,10 +437,13 @@ def validate_transaction(
 
     resulting_roster = [
         player
-        for player in roster_players
+        for player
+        in roster_players
         if (
             normalize_name(
-                player["name"]
+                player[
+                    "name"
+                ]
             )
             != drop_key
         )
@@ -275,7 +467,8 @@ def validate_transaction(
         player.get(
             "position"
         )
-        for player in resulting_roster
+        for player
+        in resulting_roster
     )
 
     roster_slots = league.get(
@@ -345,11 +538,16 @@ def validate_transaction(
 
     return {
         "provider": provider,
-        "provider_name": provider_name,
+        "provider_name": (
+            provider_name
+        ),
         "is_valid": True,
         "transaction_blocked": False,
         "transaction_executable": (
             transaction_executable
+        ),
+        "transaction_mode": (
+            transaction_mode
         ),
         "acquisition_state_confirmed": (
             acquisition_state_confirmed
@@ -364,9 +562,29 @@ def validate_transaction(
             "nfl_team": add.get(
                 "nfl_team"
             ),
-            "availability": availability,
-            "waiver_date": add.get(
-                "waiver_date"
+            "availability": (
+                availability
+            ),
+            "acquisition_reason": (
+                add.get(
+                    "acquisition_reason"
+                )
+            ),
+            "acquisition_state_confirmed": (
+                add.get(
+                    "acquisition_state_confirmed",
+                    acquisition_state_confirmed,
+                )
+            ),
+            "immediately_addable": (
+                add.get(
+                    "immediately_addable"
+                )
+            ),
+            "waiver_date": (
+                add.get(
+                    "waiver_date"
+                )
             ),
         },
         "drop": {
@@ -389,7 +607,7 @@ def validate_transaction(
         "resulting_position_counts": dict(
             position_counts
         ),
-        "errors": errors,
+        "errors": [],
         "warnings": warnings,
     }
 
@@ -400,14 +618,13 @@ def validate_add_drop(
     drop_player: str,
 ) -> str:
     """
-    Deterministically validate a proposed fantasy add/drop
-    against the currently selected provider.
+    Deterministically validate a proposed fantasy add/drop.
 
-    Yahoo FA/W acquisition states can be validated.
+    Sleeper FA players may be added immediately.
 
-    Sleeper UNROSTERED means only that the player is not
-    currently owned. Until the exact acquisition state is
-    established, an executable Sleeper transaction is blocked.
+    Sleeper W players may be submitted as waiver claims.
+
+    LOCKED or UNKNOWN Sleeper states are blocked.
     """
 
     return json.dumps(

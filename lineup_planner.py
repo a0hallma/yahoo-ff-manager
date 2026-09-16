@@ -218,6 +218,17 @@ def validate_plan(
     plan,
     injury_snapshot=None,
 ):
+    """
+    Deterministically validate lineup legality and injury-monitor
+    consistency.
+
+    Kickoff timing may be mentioned factually in a rationale.
+    We do not reject a lineup merely because words such as
+    "Monday", "kickoff", or "contingency" appear.
+
+    When there are zero authoritative injury/status concerns,
+    however, the lineup planner must not create a monitor item.
+    """
     lineup = plan.lineup
 
     validation = check_lineup(
@@ -244,46 +255,25 @@ def validate_plan(
         or {}
     )
 
-    injury_player_count = (
+    injury_player_count = int(
         injury_snapshot.get(
             "player_count",
             0,
         )
+        or 0
     )
 
-    if injury_player_count == 0:
-        rationale = (
-            plan.rationale
-            or ""
-        ).lower()
-
-        timing_terms = [
-            "kickoff",
-            "lock",
-            "late game",
-            "late-game",
-            "contingency",
-            "monday",
-            "sunday night",
-        ]
-
-        if any(
-            term in rationale
-            for term in timing_terms
-        ):
-            errors.append(
-                "Lineup rationale used kickoff, lock, or "
-                "contingency timing even though the "
-                "authoritative injury snapshot contains "
-                "zero injury/status concerns."
-            )
-
-        if plan.monitor:
-            errors.append(
+    if (
+        injury_player_count == 0
+        and plan.monitor
+    ):
+        errors.append(
+            (
                 "Monitor list must be empty when the "
                 "authoritative injury snapshot contains "
                 "zero injury/status concerns."
             )
+        )
 
     validation[
         "errors"
@@ -300,6 +290,7 @@ def validate_plan(
     )
 
     return validation
+
 
 def build_validated_lineup(
     injury_snapshot=None,
