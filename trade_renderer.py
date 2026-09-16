@@ -1,9 +1,4 @@
-from provider_context import (
-    get_provider_display_name,
-)
-
-
-def render_validated_trade_section(
+﻿def render_validated_trade_section(
     validated,
 ):
     """
@@ -120,6 +115,34 @@ def render_validated_trade_section(
             )
         )
 
+        position_count = (
+            idea.get(
+                "target_team_position_count",
+                0,
+            )
+        )
+
+        same_position_players = (
+            idea.get(
+                "target_team_same_position_players",
+                [],
+            )
+        )
+
+        replacement_risk = (
+            idea.get(
+                "replacement_risk",
+                "unknown",
+            )
+        )
+
+        attainability = (
+            idea.get(
+                "attainability",
+                "unknown",
+            )
+        )
+
         upgrade_path = (
             idea.get(
                 "upgrade_path",
@@ -160,9 +183,33 @@ def render_validated_trade_section(
             f"- **Position:** {target_position}"
         )
 
+        lines.append(
+            f"- **Opponent {target_position} depth:** "
+            f"{position_count} player(s)"
+        )
+
+        if same_position_players:
+            lines.append(
+                f"- **Same-position players:** "
+                + ", ".join(
+                    same_position_players
+                )
+            )
+
+        lines.append(
+            f"- **Replacement risk:** "
+            f"{replacement_risk}"
+        )
+
+        lines.append(
+            f"- **Attainability:** "
+            f"{attainability}"
+        )
+
         if upgrade_path:
             lines.append(
-                f"- **Why target them:** {upgrade_path}"
+                f"- **Why target them:** "
+                f"{upgrade_path}"
             )
 
         if partner_fit:
@@ -173,11 +220,13 @@ def render_validated_trade_section(
 
         if value_note:
             lines.append(
-                f"- **Value context:** {value_note}"
+                f"- **Value context:** "
+                f"{value_note}"
             )
 
         lines.append(
-            f"- **Confidence:** {confidence}"
+            f"- **Confidence:** "
+            f"{confidence}"
         )
 
         lines.append(
