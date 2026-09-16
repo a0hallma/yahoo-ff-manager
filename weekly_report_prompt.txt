@@ -1,11 +1,16 @@
 Perform my complete weekly fantasy football roster audit.
 
+Use the fantasy provider selected for the current run.
+
 Use my actual league settings, current roster, available-player data,
 authoritative validated lineup, authoritative injury snapshot, authoritative
 validated contingencies, and authoritative validated transaction supplied
 with this prompt.
 
-Research current 2026 information when useful for non-injury football
+Do not mix roster, league, availability, transaction, injury, schedule,
+or contingency data between fantasy providers.
+
+Research current-season information when useful for non-injury football
 context such as player role, workload, depth chart, matchup, transactions,
 and other material news.
 
@@ -79,7 +84,7 @@ Use the AUTHORITATIVE INJURY SNAPSHOT supplied with this prompt as the single
 source of truth for injury facts.
 
 For each relevant injured or questionable player, preserve exactly:
-- Yahoo designation
+- provider_status / roster_status
 - exact_reported_injury
 - latest_practice_date
 - latest_practice_participation
@@ -87,6 +92,8 @@ For each relevant injured or questionable player, preserve exactly:
 - newest credible update
 
 Rules:
+- The fantasy-provider roster status is not itself an official NFL injury
+  report.
 - Do not rename, translate, broaden, or generalize an injury.
 - Do not infer a body part.
 - Do not convert psoas soreness into groin injury.
@@ -152,18 +159,22 @@ section.
 
 Do not recommend a different specific add/drop transaction.
 
-If recommend_move=true:
-- Use the exact validated add player.
-- Use the exact validated drop player.
-- Preserve FA-versus-waiver status.
-- Preserve the validated waiver date when present.
-- Preserve the resulting roster construction.
-
-If recommend_move=false:
-- Recommend standing pat.
-
-Do not claim another specific transaction is executable unless it has been
-independently validated.
+Transaction rules:
+- If transaction_blocked=true, do not describe the result as standing pat.
+- If transaction_blocked=true, state elsewhere only when relevant that
+  executable roster-move analysis is blocked pending required provider data.
+- If transaction_blocked=true, do not claim any specific acquisition is
+  executable.
+- If transaction_blocked=false and recommend_move=false, standing pat is the
+  authoritative transaction decision.
+- If transaction_blocked=false and recommend_move=true, use the exact
+  validated add player and exact validated drop player.
+- Preserve the provider's validated acquisition state exactly.
+- Preserve waiver date, FAAB, waiver priority, or other acquisition metadata
+  only when actually supplied by the validated transaction.
+- Do not translate an UNROSTERED state into free agent or waiver claim.
+- Do not claim another specific transaction is executable unless it has been
+  independently validated.
 
 
 6. ROSTER CONSTRUCTION
@@ -172,10 +183,18 @@ Identify:
 - Excess positional depth
 - Weak positional depth
 - Bye-week problems
-- IR opportunities
+- IR or reserve opportunities when the league supports them
 - Players whose roster spots are becoming expendable
 
-Use the validated transaction when discussing the resulting roster.
+Use the authoritative validated transaction when discussing the resulting
+roster.
+
+If transaction_blocked=true, do not describe the roster as intentionally
+standing pat because of football value.
+
+Instead distinguish:
+- no worthwhile move exists, from
+- executable transaction analysis is currently blocked.
 
 Do not recommend a conflicting add/drop move.
 
@@ -195,9 +214,11 @@ If a validated contingency is needed, say:
 
 "Follow the validated contingency in Section 3."
 
-Do not recommend securing a free agent unless that player appears in the
-authoritative validated contingency data or authoritative transaction
-analysis.
+Do not recommend securing an external player unless that player appears in
+authoritative provider data and the validated transaction or contingency data
+establishes that the acquisition is executable.
+
+An unrostered player is not necessarily an immediately addable player.
 
 Remember that available-player data may be stale if DATA HEALTH reported a
 freshness warning.
@@ -205,25 +226,14 @@ freshness warning.
 
 8. TRADE OPPORTUNITIES
 
-Review the roster and league context for worthwhile trade opportunities.
+Output exactly this marker under the heading and nothing else:
 
-Only recommend a trade if there is a realistic chance the manager controlling
-the other roster would consider it fair and accept it.
+[[VALIDATED_TRADE_PLAN]]
 
-For any recommended trade:
-- Explain why it could appeal to both managers.
-- Explain the near-term impact.
-- Explain the mid-term impact.
-- Explain the longer-term roster impact.
-- Ground the recommendation in current player value, role, roster needs, and
-  relevant fantasy-football context.
-
-Do not recommend a trade merely for the sake of making a trade.
-
-If no worthwhile trade opportunity exists, state:
-
-"No trades are worth exploring this week."
-
+Do not independently analyze, recommend, reject, summarize, or modify trades.
+Do not name any trade target outside the marker.
+The validated trade section will be inserted by Python after report generation.
+Preserve the marker exactly once.
 
 9. ACTION PLAN
 
@@ -234,6 +244,7 @@ Use exactly these categories:
 DO NOW:
 1.
 2.
+
 
 BEFORE NEXT EARLY KICKOFF:
 State the day and Eastern kickoff time of the earliest upcoming NFL game
@@ -255,7 +266,11 @@ When a contingency becomes necessary, say:
 
 Do not make a roster change merely for the sake of making a change.
 
-Preserving roster value and waiver priority is a valid recommendation.
+If transaction_blocked=true, do not tell me to execute a specific add/drop.
+
+Preserving roster value and preserving acquisition resources such as waiver
+priority or FAAB, when applicable to the selected league, are valid
+recommendations.
 
 
 FORMAT RULES
@@ -272,3 +287,45 @@ FORMAT RULES
 - Do not independently generate a different add/drop transaction.
 - Keep recommendations consistent with the authoritative validated lineup,
   injury snapshot, validated contingencies, and validated transaction.
+- Never mix data from another fantasy provider or league into the report.
+REPORT SAFETY RULES
+
+- There is no assumed global Sunday lineup lock.
+- Use each player's actual NFL kickoff from the authoritative schedule as that player's relevant decision deadline.
+- Never say that all Sunday players lock at 1:00 PM Eastern.
+- Do not create monitoring concern merely because a healthy player plays Monday.
+- If the authoritative injury snapshot contains no injury/status concern for a player, do not invent one.
+
+- Only reference a "validated contingency in Section 3" for a player who actually appears in the authoritative validated contingency data.
+- If candidate_count=0, do not tell me to follow a validated contingency anywhere in Sections 2 through 9.
+- If a specific player has no validated contingency, do not imply that one exists.
+- If a new injury or status change occurs for a player without a validated contingency, state that the lineup must be re-evaluated.
+
+TRADE REPORT SAFETY RULES
+
+- Section 8 may only recommend or rule out trades when current league-wide roster data is available.
+- If opposing-team roster data is not present in the authoritative report input, output:
+  "Trade analysis not evaluated because current opposing-team rosters were not supplied."
+- Do not output "No trades are worth exploring this week" merely because no opposing roster data was provided.
+
+SUNDAY RECHECK RULES
+
+- Even when the authoritative injury snapshot contains zero current concerns, a routine Sunday status recheck is appropriate because player availability can change after the weekly report is generated.
+- Clearly distinguish a routine Sunday recheck from monitoring a known injury or status concern.
+- Do not imply that a healthy player currently has an injury concern merely because a Sunday recheck is recommended.
+- Use each player's actual kickoff time when describing when status should be rechecked.
+- Do not describe all Sunday players as having a 1:00 PM Eastern deadline when some play later.
+
+TRADE SPECIFICITY RULES
+
+- Do not present a team-level trade idea without identifying a specific player target currently rostered by that team.
+- Every trade opportunity must identify:
+  - the specific target player,
+  - the fantasy team that currently rosters that player,
+  - the roster need or upgrade the target would address,
+  - and why my roster construction could support exploring that trade.
+- Fantasy ownership must come only from the authoritative league-wide roster data.
+- Do not invent a specific offer unless there is enough current player-value evidence to support both sides of the proposed exchange.
+- If there is not enough evidence for a specific offer, identify the target and trade partner but state that offer construction still requires value analysis.
+- Do not recommend acquiring a backup QB or TE merely because my roster only contains one. In a one-QB or one-TE league, consider positional scarcity, replacement value, bye-week timing, starter quality, and whether the trade would materially improve the roster.
+- Prefer trades that improve starting-lineup quality, meaningful injury/bye insurance, or roster flexibility over trades that simply fill every bench position.

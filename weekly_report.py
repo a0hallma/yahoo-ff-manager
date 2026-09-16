@@ -1,8 +1,15 @@
+import argparse
 import json
+from pathlib import Path
 
 from dotenv import load_dotenv
 from agents import Agent, Runner, WebSearchTool
 
+from provider_context import (
+    set_current_provider,
+    get_current_provider,
+    get_provider_display_name,
+)
 from league_tools import get_league_settings
 from roster_tools import get_my_roster
 from waiver_tools import (
@@ -19,9 +26,15 @@ from lineup_planner import build_validated_lineup
 from contingency_tools import get_lock_aware_player_pool
 from transaction_tools import validate_add_drop
 from transaction_planner import build_validated_transaction
+from trade_planner import build_validated_trade_plan
 from contingency_planner import build_all_validated_contingencies
 from injury_researcher import build_injury_research_snapshot
 from contingency_renderer import render_validated_contingencies
+from trade_renderer import render_validated_trade_section
+from league_roster_tools import (
+    build_league_roster_summary,
+)
+
 
 
 load_dotenv()
@@ -31,23 +44,49 @@ with open(
     "gm_instructions.txt",
     "r",
     encoding="utf-8",
-) as f:
-    gm_instructions = f.read()
+) as file:
+    GM_INSTRUCTIONS = file.read()
 
 
 with open(
     "weekly_report_prompt.txt",
     "r",
     encoding="utf-8",
-) as f:
-    weekly_report_prompt = f.read()
+) as file:
+    WEEKLY_REPORT_PROMPT = file.read()
 
 
-agent = Agent(
-    name="Yahoo Fantasy Weekly GM",
-    instructions=gm_instructions,
-    model="gpt-5.6-luna",
-    tools=[
+VALIDATED_CONTINGENCY_FILES = {
+    "yahoo": Path("data/validated_contingencies.json"),
+    "sleeper": Path("data/sleeper_validated_contingencies.json"),
+}
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description=(
+            "Generate the weekly Fantasy GM report for "
+            "the selected fantasy provider."
+        )
+    )
+
+    parser.add_argument(
+        "provider",
+        choices=[
+            "yahoo",
+            "sleeper",
+        ],
+        help="Fantasy provider to analyze.",
+    )
+
+    return parser.parse_args()
+
+
+def build_weekly_agent():
+    provider = get_current_provider()
+    provider_name = get_provider_display_name()
+
+    tools = [
         get_league_settings,
         get_my_roster,
         get_available_players,
@@ -58,8 +97,78 @@ agent = Agent(
         validate_lineup,
         validate_add_drop,
         WebSearchTool(),
-    ],
-)
+    ]
+
+    # League-wide Sleeper rosters are available for
+    # deterministic trade-partner analysis.
+
+    return Agent(
+        name=f"{provider_name} Fantasy Weekly GM",
+        instructions=GM_INSTRUCTIONS,
+        model="gpt-5.6-luna",
+        tools=tools,
+    )
+
+def build_trade_context():
+    """
+    Build provider-specific league-wide roster context
+    for trade analysis.
+
+    Sleeper currently has live league-wide roster data.
+
+    Yahoo trade analysis remains unavailable until equivalent
+    Yahoo league-wide roster data is integrated.
+    """
+
+    provider = get_current_provider()
+    provider_name = get_provider_display_name()
+
+    if provider != "sleeper":
+        return {
+            "provider": provider,
+            "provider_name": provider_name,
+            "league_wide_rosters_available": False,
+            "reason": (
+                "Current league-wide opposing-team roster "
+                "data has not yet been integrated for "
+                f"{provider_name}."
+            ),
+        }
+
+    try:
+        summary = (
+            build_league_roster_summary()
+        )
+
+    except Exception as exc:
+        return {
+            "provider": provider,
+            "provider_name": provider_name,
+            "league_wide_rosters_available": False,
+            "reason": str(exc),
+        }
+
+    return {
+        "provider": provider,
+        "provider_name": provider_name,
+        "league_wide_rosters_available": True,
+        "league_id": summary.get(
+            "league_id"
+        ),
+        "league_name": summary.get(
+            "league_name"
+        ),
+        "generated_at": summary.get(
+            "generated_at"
+        ),
+        "team_count": summary.get(
+            "team_count"
+        ),
+        "teams": summary.get(
+            "teams",
+            [],
+        ),
+    }
 
 
 def render_validated_lineup_section(validated):
@@ -114,6 +223,16 @@ def render_validated_lineup_section(validated):
 
 
 def render_validated_transaction_section(validated):
+    provider = validated.get(
+        "provider",
+        get_current_provider(),
+    )
+
+    provider_name = validated.get(
+        "provider_name",
+        get_provider_display_name(),
+    )
+
     recommendation = validated[
         "recommendation"
     ]
@@ -127,55 +246,104 @@ def render_validated_transaction_section(validated):
         "transaction_blocked",
         False,
     ):
+        blocked_reason = validated.get(
+            "blocked_reason",
+            "transaction_blocked",
+        )
+
         freshness = validated.get(
             "availability_check",
             {},
         )
 
-        age_days = freshness.get(
-            "age_days"
-        )
-
-        last_updated = freshness.get(
-            "last_updated"
-        )
-
         lines.extend(
             [
-                "**STATUS: BLOCKED — REFRESH YAHOO AVAILABILITY**",
+                "**STATUS: BLOCKED**",
                 "",
             ]
         )
 
-        if age_days is not None:
-            lines.append(
-                f"Available-player data is **{age_days} day(s) old**."
+        if blocked_reason == "stale_available_player_snapshot":
+            age_days = freshness.get(
+                "age_days"
             )
 
-        if last_updated:
-            lines.append(
-                f"Last Yahoo availability snapshot: "
-                f"**{last_updated}**."
+            last_updated = freshness.get(
+                "last_updated"
             )
+
+            if age_days is not None:
+                lines.append(
+                    f"{provider_name} available-player data is "
+                    f"**{age_days} day(s) old**."
+                )
+
+            if last_updated:
+                lines.append(
+                    f"Last {provider_name} availability snapshot: "
+                    f"**{last_updated}**."
+                )
+
+            lines.extend(
+                [
+                    "",
+                    "Executable roster-move analysis is blocked "
+                    f"until {provider_name} availability is refreshed.",
+                ]
+            )
+
+        elif blocked_reason == "unverified_sleeper_acquisition_state":
+            lines.extend(
+                [
+                    "Sleeper confirms which players are unrostered, "
+                    "but the current data does not establish whether "
+                    "each player is immediately addable or subject "
+                    "to waivers.",
+                    "",
+                    "No specific Sleeper add/drop is presented as "
+                    "executable until that acquisition state is verified.",
+                ]
+            )
+
+        else:
+            rationale = recommendation.get(
+                "rationale"
+            )
+
+            if rationale:
+                lines.append(
+                    rationale
+                )
+
+            validation = validated.get(
+                "validation"
+            )
+
+            if validation:
+                validation_reason = validation.get(
+                    "block_reason"
+                )
+
+                if validation_reason:
+                    lines.extend(
+                        [
+                            "",
+                            str(validation_reason),
+                        ]
+                    )
 
         lines.extend(
             [
                 "",
-                "Do not execute an add/drop transaction until "
-                "Yahoo availability is refreshed.",
-                "",
-                "The Fantasy GM did not evaluate or recommend an "
-                "executable roster move because current player "
-                "availability could not be verified.",
-                "",
-                "**Python transaction validation:** BLOCKED — "
-                "stale available-player data.",
+                "**Python transaction validation:** BLOCKED",
             ]
         )
 
         return "\n".join(lines)
 
-    if not validated["recommend_move"]:
+    if not validated[
+        "recommend_move"
+    ]:
         lines.extend(
             [
                 "**Recommendation:** Stand pat.",
@@ -204,22 +372,40 @@ def render_validated_transaction_section(validated):
         "drop"
     ]
 
-    if add["availability"] == "FA":
+    availability = add.get(
+        "availability"
+    )
+
+    if (
+        provider == "yahoo"
+        and availability == "FA"
+    ):
         availability_text = (
             "Free agent (FA)"
         )
+
+    elif (
+        provider == "yahoo"
+        and availability == "W"
+    ):
+        availability_text = (
+            "Waivers (W)"
+        )
+
     else:
         availability_text = (
-            "Waivers"
+            str(availability)
+            if availability
+            else "Unknown"
         )
 
     lines.extend(
         [
-            f"**ADD:** {add['name']} — "
+            f"**ADD:** {add['name']} - "
             f"{add['position']}, "
             f"{add['nfl_team']}",
             "",
-            f"**DROP:** {drop['name']} — "
+            f"**DROP:** {drop['name']} - "
             f"{drop['position']}, "
             f"{drop['nfl_team']}",
             "",
@@ -292,270 +478,493 @@ def render_validated_transaction_section(validated):
     return "\n".join(lines)
 
 
-print(
-    "Checking fantasy data..."
-)
+def save_validated_contingencies(
+    validated_contingencies,
+):
+    provider = get_current_provider()
 
-health = (
-    build_data_health_report()
-)
+    output_file = (
+        VALIDATED_CONTINGENCY_FILES[
+            provider
+        ]
+    )
 
-print(
-    f"DATA HEALTH: "
-    f"{health['overall_status']}"
-)
+    output_file.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
-problems = [
-    check
-    for check in health["checks"]
-    if check["status"]
-    in {
-        "WARN",
-        "FAIL",
+    with output_file.open(
+        "w",
+        encoding="utf-8",
+    ) as file:
+        json.dump(
+            validated_contingencies,
+            file,
+            indent=2,
+        )
+
+    return output_file
+
+def validate_final_report_safety(
+    report_text,
+    validated_contingencies,
+    trade_context,
+):
+    """
+    Catch report statements that contradict authoritative
+    deterministic data.
+
+    This is intentionally conservative. A generated report
+    should fail validation rather than present fabricated
+    lineup-lock, contingency, or trade conclusions.
+    """
+
+    errors = []
+
+    text = (
+        report_text
+        or ""
+    )
+
+    lower_text = text.lower()
+
+    forbidden_lock_phrases = [
+        "sunday slate lock",
+        "sunday lineup lock",
+        "all sunday starters lock at 1",
+        "all sunday players lock at 1",
+    ]
+
+    for phrase in forbidden_lock_phrases:
+        if phrase in lower_text:
+            errors.append(
+                "Report invented a global Sunday lineup lock: "
+                f"{phrase}"
+            )
+
+    candidate_count = validated_contingencies.get(
+        "candidate_count",
+        0,
+    )
+
+    if candidate_count == 0:
+        contingency_phrases = [
+            "follow the validated contingency",
+            "follow validated contingency",
+            "validated contingency in section 3",
+        ]
+
+        for phrase in contingency_phrases:
+            if phrase in lower_text:
+                errors.append(
+                    "Report referenced a validated contingency "
+                    "even though candidate_count=0."
+                )
+                break
+
+    league_rosters_available = trade_context.get(
+        "league_wide_rosters_available",
+        False,
+    )
+
+    if not league_rosters_available:
+        unsafe_trade_phrases = [
+            "no trades are worth exploring",
+            "no trade is worth exploring",
+        ]
+
+        for phrase in unsafe_trade_phrases:
+            if phrase in lower_text:
+                errors.append(
+                    "Report made a trade conclusion without "
+                    "league-wide opposing rosters."
+                )
+                break
+
+    return {
+        "is_valid": not errors,
+        "errors": errors,
     }
-]
 
-for check in problems:
-    print(
-        f"{check['status']}: "
-        f"{check['name']} — "
-        f"{check['detail']}"
-    )
 
-if (
-    health["overall_status"]
-    == "FAIL"
+def insert_validated_trade_section(
+    report_text,
+    trade_section,
 ):
+    """
+    Deterministically own Section 8.
+
+    Replace any AI-generated Section 8 with the validated
+    Python-rendered trade section.
+
+    If Section 8 is missing, insert it immediately before
+    Section 9.
+    """
+
+    section_8_heading = (
+        "## 8. TRADE OPPORTUNITIES"
+    )
+
+    section_9_heading = (
+        "## 9. ACTION PLAN"
+    )
+
+    if section_9_heading not in report_text:
+        raise RuntimeError(
+            "Unable to insert validated trade section because "
+            "the report is missing the Section 9 heading."
+        )
+
+    replacement = (
+        f"{section_8_heading}\n\n"
+        f"{trade_section.strip()}\n\n"
+    )
+
+    section_8_index = report_text.find(
+        section_8_heading
+    )
+
+    section_9_index = report_text.find(
+        section_9_heading
+    )
+
+    if (
+        section_8_index != -1
+        and section_8_index < section_9_index
+    ):
+        return (
+            report_text[:section_8_index]
+            + replacement
+            + report_text[section_9_index:]
+        )
+
+    return (
+        report_text[:section_9_index]
+        + replacement
+        + report_text[section_9_index:]
+    )
+
+def main():
+    args = parse_args()
+
+    provider = set_current_provider(
+        args.provider
+    )
+
+    provider_name = (
+        get_provider_display_name()
+    )
+
+    print(
+        f"Fantasy provider: "
+        f"{provider_name} ({provider})"
+    )
+
     print()
     print(
-        "Weekly report cancelled because required "
-        "fantasy data failed validation."
+        "Checking fantasy data..."
     )
 
-    raise SystemExit(1)
-
-print()
-
-
-print(
-    "Researching current injury facts..."
-)
-
-try:
-    injury_snapshot = (
-        build_injury_research_snapshot()
+    health = (
+        build_data_health_report()
     )
 
-except Exception as exc:
+    print(
+        f"DATA HEALTH: "
+        f"{health['overall_status']}"
+    )
+
+    problems = [
+        check
+        for check in health["checks"]
+        if check["status"]
+        in {
+            "WARN",
+            "FAIL",
+        }
+    ]
+
+    for check in problems:
+        print(
+            f"{check['status']}: "
+            f"{check['name']} - "
+            f"{check['detail']}"
+        )
+
+    if (
+        health["overall_status"]
+        == "FAIL"
+    ):
+        print()
+        print(
+            "Weekly report cancelled because required "
+            "fantasy data failed validation."
+        )
+
+        raise SystemExit(1)
+
     print()
     print(
-        f"INJURY RESEARCH: FAIL — "
-        f"{exc}"
+        "Researching current injury facts..."
     )
+
+    try:
+        injury_snapshot = (
+            build_injury_research_snapshot()
+        )
+
+    except Exception as exc:
+        print()
+        print(
+            f"INJURY RESEARCH: FAIL - "
+            f"{exc}"
+        )
+        print(
+            "Weekly report cancelled."
+        )
+
+        raise SystemExit(1)
+
     print(
-        "Weekly report cancelled."
+        f"INJURY RESEARCH: PASS "
+        f"({injury_snapshot['player_count']} player(s), "
+        f"{injury_snapshot.get('research_attempts', 0)} "
+        f"attempt(s))"
     )
 
-    raise SystemExit(1)
+    print()
+    print(
+        "Building validated starting lineup..."
+    )
 
-print(
-    f"INJURY RESEARCH: PASS "
-    f"({injury_snapshot['player_count']} player(s), "
-    f"{injury_snapshot.get('research_attempts', 0)} "
-    f"attempt(s))"
-)
+    try:
+        validated_lineup = (
+            build_validated_lineup(
+                injury_snapshot=injury_snapshot
+            )
+        )
 
-print()
+    except Exception as exc:
+        print()
+        print(
+            f"LINEUP VALIDATION: FAIL - "
+            f"{exc}"
+        )
+        print(
+            "Weekly report cancelled."
+        )
 
+        raise SystemExit(1)
 
-print(
-    "Building validated starting lineup..."
-)
+    print(
+        f"LINEUP VALIDATION: PASS "
+        f"({validated_lineup['attempts']} "
+        f"attempt(s))"
+    )
 
-try:
-    validated_lineup = (
-        build_validated_lineup(
-            injury_snapshot=injury_snapshot
+    print()
+    print(
+        "Building validated contingencies..."
+    )
+
+    try:
+        validated_contingencies = (
+            build_all_validated_contingencies(
+                validated_lineup[
+                    "plan"
+                ][
+                    "lineup"
+                ]
+            )
+        )
+
+    except Exception as exc:
+        import traceback
+
+        print()
+        traceback.print_exc()
+        print()
+
+        print(
+            f"CONTINGENCY VALIDATION: FAIL - "
+            f"{exc}"
+        )
+        print(
+            "Weekly report cancelled."
+        )
+
+        raise SystemExit(1)
+
+    print(
+        f"CONTINGENCY VALIDATION: PASS "
+        f"({validated_contingencies['candidate_count']} "
+        f"candidate(s))"
+    )
+
+    contingency_file = (
+        save_validated_contingencies(
+            validated_contingencies
         )
     )
 
-except Exception as exc:
+    print(
+        f"Validated contingencies saved to "
+        f"{contingency_file}."
+    )
+
     print()
     print(
-        f"LINEUP VALIDATION: FAIL — "
-        f"{exc}"
-    )
-    print(
-        "Weekly report cancelled."
+        "Evaluating roster move..."
     )
 
-    raise SystemExit(1)
-
-print(
-    f"LINEUP VALIDATION: PASS "
-    f"({validated_lineup['attempts']} "
-    f"attempt(s))"
-)
-
-print()
-
-
-print(
-    "Building validated contingencies..."
-)
-
-try:
-    validated_contingencies = (
-        build_all_validated_contingencies(
-            validated_lineup[
-                "plan"
-            ][
-                "lineup"
-            ]
+    try:
+        validated_transaction = (
+            build_validated_transaction()
         )
-    )
 
-except Exception as exc:
-    import traceback
-
-    print()
-    traceback.print_exc()
-    print()
-
-    print(
-        f"CONTINGENCY VALIDATION: FAIL — "
-        f"{exc}"
-    )
-    print(
-        "Weekly report cancelled."
-    )
-
-    raise SystemExit(1)
-
-print(
-    f"CONTINGENCY VALIDATION: PASS "
-    f"({validated_contingencies['candidate_count']} "
-    f"candidate(s))"
-)
-
-print()
-
-
-with open(
-    "data/validated_contingencies.json",
-    "w",
-    encoding="utf-8",
-) as f:
-    json.dump(
-        validated_contingencies,
-        f,
-        indent=2,
-    )
-
-
-print(
-    "Evaluating roster move..."
-)
-
-try:
-    validated_transaction = (
-        build_validated_transaction()
-    )
-
-except Exception as exc:
-    print()
-    print(
-        f"TRANSACTION VALIDATION: FAIL — "
-        f"{exc}"
-    )
-    print(
-        "Weekly report cancelled."
-    )
-
-    raise SystemExit(1)
-
-
-if validated_transaction.get(
-    "transaction_blocked",
-    False,
-):
-    freshness = (
-        validated_transaction.get(
-            "availability_check",
-            {},
+    except Exception as exc:
+        print()
+        print(
+            f"TRANSACTION VALIDATION: FAIL - "
+            f"{exc}"
         )
-    )
+        print(
+            "Weekly report cancelled."
+        )
 
-    age_days = freshness.get(
-        "age_days"
-    )
+        raise SystemExit(1)
 
-    if age_days is not None:
+    if validated_transaction.get(
+        "transaction_blocked",
+        False,
+    ):
         print(
             "TRANSACTION VALIDATION: BLOCKED "
-            f"(available-player snapshot is "
-            f"{age_days} day(s) old)"
+            f"({validated_transaction.get('blocked_reason', 'unknown')})"
+        )
+
+    elif validated_transaction[
+        "recommend_move"
+    ]:
+        print(
+            f"TRANSACTION VALIDATION: PASS "
+            f"({validated_transaction['attempts']} "
+            f"attempt(s))"
         )
 
     else:
         print(
-            "TRANSACTION VALIDATION: BLOCKED "
-            "(available-player data is not current)"
+            "TRANSACTION VALIDATION: PASS "
+            "(standing pat recommended)"
         )
 
-elif validated_transaction[
-    "recommend_move"
-]:
+    print()
     print(
-        f"TRANSACTION VALIDATION: PASS "
-        f"({validated_transaction['attempts']} "
-        f"attempt(s))"
+        "Evaluating trade opportunities..."
     )
 
-else:
+    try:
+        validated_trade_plan = (
+            build_validated_trade_plan()
+        )
+
+    except Exception as exc:
+        print()
+        print(
+            f"TRADE VALIDATION: FAIL - {exc}"
+        )
+        print(
+            "Weekly report cancelled."
+        )
+
+        raise SystemExit(1)
+
+    if (
+        validated_trade_plan.get(
+            "status"
+        )
+        == "blocked"
+    ):
+        print(
+            "TRADE VALIDATION: BLOCKED "
+            f"({validated_trade_plan.get('blocked_reason', 'unknown')})"
+        )
+
+    else:
+        trade_ideas = (
+            validated_trade_plan.get(
+                "plan",
+                {},
+            ).get(
+                "ideas",
+                [],
+            )
+        )
+
+        print(
+            "TRADE VALIDATION: PASS "
+            f"({validated_trade_plan.get('attempts', 0)} "
+            f"attempt(s), {len(trade_ideas)} "
+            "idea(s))"
+        )
+
+    print()
     print(
-        "TRANSACTION VALIDATION: PASS "
-        "(standing pat recommended)"
+        "Generating weekly Fantasy GM report..."
     )
 
-print()
+    print(
+        "This may take a minute because current NFL "
+        "information is being researched.\n"
+    )
 
+    validated_plan_json = json.dumps(
+        validated_lineup[
+            "plan"
+        ],
+        indent=2,
+    )
 
-print(
-    "Generating weekly Fantasy GM report..."
+    injury_snapshot_json = json.dumps(
+        injury_snapshot,
+        indent=2,
+    )
+
+    validated_transaction_json = json.dumps(
+        validated_transaction,
+        indent=2,
+    )
+
+    validated_trade_plan_json = json.dumps(
+        validated_trade_plan,
+        indent=2,
+    )
+
+    validated_contingencies_json = json.dumps(
+        validated_contingencies,
+        indent=2,
+    )
+
+    trade_context = (
+        build_trade_context()
+    )
+
+    trade_context_json = json.dumps(
+        trade_context,
+        indent=2,
 )
 
-print(
-    "This may take a minute because current NFL "
-    "information is being researched.\n"
-)
+    report_input = f"""
+{WEEKLY_REPORT_PROMPT}
 
+CURRENT FANTASY PROVIDER
 
-validated_plan_json = json.dumps(
-    validated_lineup[
-        "plan"
-    ],
-    indent=2,
-)
+Provider: {provider_name}
+Provider key: {provider}
 
-injury_snapshot_json = json.dumps(
-    injury_snapshot,
-    indent=2,
-)
+Use only data belonging to this provider and its selected league.
 
-validated_transaction_json = json.dumps(
-    validated_transaction,
-    indent=2,
-)
-
-validated_contingencies_json = json.dumps(
-    validated_contingencies,
-    indent=2,
-)
-
-
-report_input = f"""
-{weekly_report_prompt}
 
 AUTHORITATIVE VALIDATED LINEUP
 
@@ -583,15 +992,15 @@ report.
 
 Rules:
 
-- Use yahoo_status exactly as supplied.
+- Use provider_status and roster_status exactly as supplied.
+- Do not treat provider roster status as an official NFL injury report.
 - Use exact_reported_injury exactly as supplied.
 - Do not rename, translate, or generalize an injury.
 - Do not convert psoas soreness into groin injury.
 - Use latest_practice_participation exactly as supplied.
 - If participation is "Not specified", do not infer Full or Limited.
 - Use official_game_status exactly as supplied.
-- If it is "Not yet available", do not invent an official
-  designation.
+- If it is "Not yet available", do not invent an official designation.
 - Reporter expectations are not official game statuses.
 - Do not independently research or replace these injury facts.
 - You may still research non-injury role, workload, matchup, or
@@ -611,6 +1020,26 @@ Python will render the exact contingency changes in Section 3.
 
 {validated_contingencies_json}
 
+AUTHORITATIVE VALIDATED TRADE PLAN
+
+The following trade analysis was generated by the dedicated trade
+planner and checked against authoritative league-wide roster ownership.
+
+{validated_trade_plan_json}
+
+Trade-report rules:
+
+- Section 8 must use only the validated trade plan above.
+- Do not independently generate additional trade targets.
+- Do not substitute a different target player or fantasy team.
+- Do not invent a specific trade offer.
+- If status="blocked", state that trade analysis is unavailable and
+  preserve the supplied blocked reason.
+- If status="pass" and ideas is empty, explain the supplied summary
+  without inventing a trade opportunity.
+- If status="pass" and ideas are present, Section 8 may discuss only
+  those validated ideas.
+- Preserve each target player's validated fantasy team ownership.
 
 AUTHORITATIVE TRANSACTION ANALYSIS
 
@@ -621,143 +1050,186 @@ transaction planner and checked by Python.
 
 Transaction rules:
 
-- If transaction_blocked=true, current Yahoo availability could not
-  be verified.
 - If transaction_blocked=true, do NOT describe the result as
   "standing pat."
-- If transaction_blocked=true, state that roster-move analysis is
-  blocked until Yahoo availability is refreshed.
-- If transaction_blocked=true, do not claim any player is currently
-  available based on the stale snapshot.
-- If transaction_blocked=true, do not recommend an executable
-  add/drop elsewhere in the report.
-- If transaction_blocked=true, do not present a stale free-agent
-  candidate as a confirmed current free agent.
+- If transaction_blocked=true, do not claim any specific add/drop is
+  executable.
+- If transaction_blocked=true, preserve the supplied blocked reason.
 - If transaction_blocked=false and recommend_move=false, standing
   pat is the authoritative transaction decision.
 - If transaction_blocked=false and recommend_move=true, use the exact
   validated add player and drop player.
+- Preserve the provider's acquisition state exactly.
+- Do not translate UNROSTERED into free agent or waiver claim.
 - Do not generate a different specific add/drop transaction.
 """
 
+    agent = build_weekly_agent()
 
-result = Runner.run_sync(
-    agent,
-    report_input,
-)
-
-
-contingency_marker = (
-    "[[VALIDATED_CONTINGENCIES]]"
-)
-
-transaction_marker = (
-    "[[ROSTER_MOVES_SECTION]]"
-)
-
-
-contingency_marker_count = (
-    result.final_output.count(
-        contingency_marker
-    )
-)
-
-if contingency_marker_count != 1:
-    print()
-    print(
-        "REPORT ASSEMBLY: FAIL — expected exactly one "
-        "VALIDATED_CONTINGENCIES marker, "
-        f"found {contingency_marker_count}."
+    result = Runner.run_sync(
+        agent,
+        report_input,
     )
 
-    raise SystemExit(1)
-
-
-transaction_marker_count = (
-    result.final_output.count(
-        transaction_marker
-    )
-)
-
-if transaction_marker_count != 1:
-    print()
-    print(
-        "REPORT ASSEMBLY: FAIL — expected exactly one "
-        "ROSTER_MOVES_SECTION marker, "
-        f"found {transaction_marker_count}."
+    contingency_marker = (
+        "[[VALIDATED_CONTINGENCIES]]"
     )
 
-    raise SystemExit(1)
+    transaction_marker = (
+        "[[ROSTER_MOVES_SECTION]]"
+    )
 
+    trade_marker = (
+        "[[VALIDATED_TRADE_PLAN]]"
+    )
 
-report_text = (
-    result.final_output
-)
+    contingency_marker_count = (
+        result.final_output.count(
+            contingency_marker
+        )
+    )
 
+    if contingency_marker_count != 1:
+        print()
+        print(
+            "REPORT ASSEMBLY: FAIL - expected exactly one "
+            "VALIDATED_CONTINGENCIES marker, "
+            f"found {contingency_marker_count}."
+        )
 
-duplicate_heading = (
-    "## 5. ROSTER MOVES\n\n"
-    + transaction_marker
-)
+        raise SystemExit(1)
 
-if duplicate_heading in report_text:
+    transaction_marker_count = (
+        result.final_output.count(
+            transaction_marker
+        )
+    )
+
+    if transaction_marker_count != 1:
+        print()
+        print(
+            "REPORT ASSEMBLY: FAIL - expected exactly one "
+            "ROSTER_MOVES_SECTION marker, "
+            f"found {transaction_marker_count}."
+        )
+
+        raise SystemExit(1)
+
     report_text = (
+        result.final_output
+    )
+
+    duplicate_heading = (
+        "## 5. ROSTER MOVES\n\n"
+        + transaction_marker
+    )
+
+    if duplicate_heading in report_text:
+        report_text = (
+            report_text.replace(
+                duplicate_heading,
+                transaction_marker,
+                1,
+            )
+        )
+
+    contingency_section = (
+        render_validated_contingencies(
+            validated_contingencies,
+            validated_lineup[
+                "plan"
+            ][
+                "lineup"
+            ],
+            availability_check=validated_transaction.get(
+                "availability_check",
+                {},
+            ),
+        )
+    )
+
+    transaction_section = (
+        render_validated_transaction_section(
+            validated_transaction
+        )
+    )
+
+    trade_section = (
+        render_validated_trade_section(
+            validated_trade_plan
+        )
+    )
+
+    report_body = (
         report_text.replace(
-            duplicate_heading,
+            contingency_marker,
+            contingency_section,
+        )
+    )
+
+    report_body = (
+        report_body.replace(
             transaction_marker,
-            1,
+            transaction_section,
         )
     )
 
 
-contingency_section = (
-    render_validated_contingencies(
-        validated_contingencies,
-        validated_lineup[
-            "plan"
-        ][
-            "lineup"
-        ],
-        availability_check=validated_transaction.get(
-            "availability_check",
-            {},
-        ),
+    report_body = (
+        insert_validated_trade_section(
+            report_text=report_body,
+            trade_section=trade_section,
+        )
     )
-)
 
 
-transaction_section = (
-    render_validated_transaction_section(
-        validated_transaction
+    safety_check = (
+        validate_final_report_safety(
+            report_text=report_body,
+            validated_contingencies=(
+                validated_contingencies
+            ),
+            trade_context=trade_context,
+        )
     )
-)
 
 
-report_body = (
-    report_text.replace(
-        contingency_marker,
-        contingency_section,
+
+    if not safety_check[
+        "is_valid"
+    ]:
+        print()
+        print(
+            "REPORT SAFETY: FAIL"
+        )
+
+        for error in safety_check[
+            "errors"
+        ]:
+            print(
+                f"- {error}"
+            )
+
+        raise SystemExit(1)
+
+    print()
+    print(
+        "REPORT SAFETY: PASS"
     )
-)
 
-report_body = (
-    report_body.replace(
-        transaction_marker,
-        transaction_section,
+
+    print()
+    print(
+        render_validated_lineup_section(
+            validated_lineup
+        )
     )
-)
 
-
-print()
-
-print(
-    render_validated_lineup_section(
-        validated_lineup
+    print()
+    print(
+        report_body
     )
-)
 
-print()
 
-print(
-    report_body
-)
+if __name__ == "__main__":
+    main()

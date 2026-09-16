@@ -4,6 +4,10 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 from agents import Agent, Runner, WebSearchTool
 
+from provider_context import (
+    get_current_provider,
+    get_provider_display_name,
+)
 from league_tools import get_league_settings
 from roster_tools import get_my_roster
 from schedule_tools import (
@@ -32,8 +36,8 @@ with open(
     "gm_instructions.txt",
     "r",
     encoding="utf-8",
-) as f:
-    GM_INSTRUCTIONS = f.read()
+) as file:
+    GM_INSTRUCTIONS = file.read()
 
 
 class StartingLineup(BaseModel):
@@ -64,102 +68,132 @@ Return a structured LineupPlan.
 The program will provide an AUTHORITATIVE INJURY SNAPSHOT.
 
 That snapshot is the single source of truth for:
-- Yahoo injury designation,
+- fantasy-provider roster status/designation,
 - exact reported injury,
 - latest practice date,
 - latest practice participation,
-- official weekly game status,
+- official weekly NFL game status,
 - newest credible injury/availability update,
 - Schefter or Rapoport injury/availability reporting.
 
-Do NOT independently reinterpret, rename, or replace those injury
-facts.
+Do NOT independently reinterpret, rename, or replace those
+injury facts.
 
 Do NOT use web research to contradict the authoritative injury
 snapshot.
 
-You may still use web research for non-injury football information,
-including:
+You may still use web research for non-injury football
+information, including:
 - player role,
 - depth-chart position,
 - workload expectations,
 - offensive usage,
 - matchup information,
 - coaching comments unrelated to injury status,
-- transactions or roster changes.
+- transactions or NFL roster changes.
 
-If non-injury research also happens to mention an injury, do not use
-that wording to replace the injury facts in the supplied snapshot.
+If non-injury research also happens to mention an injury,
+do not use that wording to replace the injury facts in the
+supplied snapshot.
 
-Requirements:
+Provider isolation requirements:
+
+- Use only the fantasy provider selected for the current run.
+- Do not request or use roster, league, availability, or
+  schedule data from another fantasy provider.
+- Do not mix players between fantasy leagues.
+- The provider and league supplied by the program are
+  authoritative for this run.
+
+Lineup requirements:
 
 - Use the current roster and league settings.
-- Use the roster schedule tool for current opponents and kickoff
-  times.
+- Use the roster schedule tool for current opponents and
+  kickoff times.
 - Use the supplied authoritative injury snapshot.
-- Research current non-injury roles and material player news when
-  useful.
+- Research current non-injury roles and material player news
+  when useful.
 - Select exactly one player for every required starting slot.
-- Only use players currently on my roster.
+- Only use players currently on my selected fantasy roster.
 - Do not place the same player in multiple slots.
-- FLEX may contain RB, WR, or TE.
-- The final lineup will be validated independently by Python after
-  you respond.
+- Respect positional eligibility.
+- The final lineup will be validated independently by Python
+  after you respond.
+
+LINEUP-SELECTION SAFETY RULES:
+
+- Select the best starting players based on expected fantasy performance, role, matchup, league scoring, and authoritative injury information.
+- A later kickoff is NOT a negative factor when choosing between healthy players.
+- Never bench an otherwise preferred healthy player merely because that player plays Sunday afternoon, Sunday night, or Monday.
+- Do not prefer an earlier-playing player simply because the earlier kickoff occurs first.
+- Kickoff timing may affect contingency planning only when the authoritative injury snapshot shows meaningful uncertainty for that specific player.
+- If the authoritative injury snapshot shows no injury or status concern for a player, do not use lock timing as a reason to bench, monitor, downgrade, or replace that player.
+- Use get_lock_aware_player_pool only for a player with meaningful authoritative injury uncertainty, not merely because the player has a late kickoff.
+- FLEX positioning may be adjusted for contingency flexibility only after the preferred set of starters has been selected and only when an actual injury/status uncertainty makes that flexibility relevant.
+- If the authoritative injury snapshot contains zero relevant injury/status concerns, lineup selection must not be altered for contingency or lock-timing reasons.
 
 Late-game contingency requirements:
 
-- For any proposed starter with meaningful injury uncertainty who
-  plays after the main Sunday 1:00 PM Eastern slate, call
-  get_lock_aware_player_pool using the exact lineup slot you plan
-  to use.
+- For any proposed starter with meaningful injury uncertainty
+  who plays after the main Sunday 1:00 PM Eastern slate, call
+  get_lock_aware_player_pool using the exact lineup slot you
+  plan to use.
 - Consider whether moving an RB, WR, or TE between a normal
   position slot and FLEX creates better late-game contingency
-  options.
-- When two lineup configurations are otherwise reasonably close,
-  prefer the configuration that preserves more viable unlocked
-  replacement options for the uncertain later-playing starter.
-- Use get_lock_aware_player_pool to understand whether an on-roster
-  contingency exists.
+  options when league rules allow it.
+- When two lineup configurations are otherwise reasonably
+  close, prefer the configuration that preserves more viable
+  unlocked replacement options for the uncertain later-playing
+  starter.
+- Use get_lock_aware_player_pool to understand whether an
+  on-roster contingency exists.
 - You may state that no on-roster contingency exists.
-- Do NOT name, recommend, or describe free-agent emergency options
-  in the lineup rationale or monitor list.
-- Free-agent emergency options are rendered separately by Python in
-  the validated contingency section.
-- Do not call any free-agent option "confirmed available."
+- Do NOT name, recommend, or describe emergency unrostered
+  player options in the lineup rationale or monitor list.
+- Emergency acquisition options are handled separately by
+  deterministic transaction and contingency logic.
+- Do not describe an unrostered player as a confirmed free
+  agent, waiver claim, or immediately addable player unless
+  current provider data establishes that state.
 
 Injury reporting requirements:
 
-- Use the Yahoo designation exactly as supplied in the injury
-  snapshot.
+- Use roster_status exactly as supplied in the injury snapshot.
+- provider_status represents the selected fantasy provider's
+  roster designation.
+- Do not treat provider_status as an NFL injury report.
 - Use exact_reported_injury exactly as supplied.
 - Never translate or generalize an injury body part.
 - Never convert psoas soreness into groin injury.
 - Use latest_practice_participation exactly as supplied.
 - If it says "Not specified", do not infer Full or Limited.
 - Use official_game_status exactly as supplied.
-- If it says "Not yet available", do not replace it with a reporter
-  expectation or fantasy projection.
-- Use the newest credible update from the snapshot when discussing
-  current availability.
-- Reporter expectations are not official game-status designations.
-- Any Schefter or Rapoport information must come from the supplied
-  injury snapshot rather than being independently reconstructed.
+- If it says "Not yet available", do not replace it with a
+  reporter expectation or fantasy projection.
+- Use the newest credible update from the snapshot when
+  discussing current availability.
+- Reporter expectations are not official game-status
+  designations.
+- Any Schefter or Rapoport injury information must come from
+  the supplied injury snapshot rather than being independently
+  reconstructed.
 
 Contingency reporting boundary:
 
-- The lineup rationale and monitor list may discuss the timing risk
+- The lineup rationale and monitor list may discuss timing risk
   created by an injured starter.
 - They may state whether an on-roster replacement exists.
-- They must not describe the exact contingency lineup changes.
-- They must not name emergency free-agent candidates.
-- Exact validated contingency actions are rendered separately by
-  Python in Section 3.
+- They must not describe exact contingency lineup changes.
+- They must not name emergency acquisition candidates.
+- Exact validated contingency actions are rendered separately
+  by Python.
 
-The monitor list should contain concise actionable items for players
-whose status materially affects the recommended lineup.
+The monitor list should contain concise actionable items for
+players whose status materially affects the recommended lineup.
 
-When describing an injured or questionable player in rationale or
-monitor, remain consistent with the authoritative injury snapshot.
+When describing an injured or questionable player in rationale
+or monitor, remain consistent with the authoritative injury
+snapshot.
 """
 
 
@@ -180,10 +214,13 @@ lineup_agent = Agent(
 )
 
 
-def validate_plan(plan):
+def validate_plan(
+    plan,
+    injury_snapshot=None,
+):
     lineup = plan.lineup
 
-    return check_lineup(
+    validation = check_lineup(
         qb=lineup.qb,
         rb1=lineup.rb1,
         rb2=lineup.rb2,
@@ -195,14 +232,100 @@ def validate_plan(plan):
         defense=lineup.defense,
     )
 
+    errors = list(
+        validation.get(
+            "errors",
+            [],
+        )
+    )
+
+    injury_snapshot = (
+        injury_snapshot
+        or {}
+    )
+
+    injury_player_count = (
+        injury_snapshot.get(
+            "player_count",
+            0,
+        )
+    )
+
+    if injury_player_count == 0:
+        rationale = (
+            plan.rationale
+            or ""
+        ).lower()
+
+        timing_terms = [
+            "kickoff",
+            "lock",
+            "late game",
+            "late-game",
+            "contingency",
+            "monday",
+            "sunday night",
+        ]
+
+        if any(
+            term in rationale
+            for term in timing_terms
+        ):
+            errors.append(
+                "Lineup rationale used kickoff, lock, or "
+                "contingency timing even though the "
+                "authoritative injury snapshot contains "
+                "zero injury/status concerns."
+            )
+
+        if plan.monitor:
+            errors.append(
+                "Monitor list must be empty when the "
+                "authoritative injury snapshot contains "
+                "zero injury/status concerns."
+            )
+
+    validation[
+        "errors"
+    ] = errors
+
+    validation[
+        "is_legal"
+    ] = (
+        validation.get(
+            "is_legal",
+            False,
+        )
+        and not errors
+    )
+
+    return validation
 
 def build_validated_lineup(
     injury_snapshot=None,
     max_attempts=3,
 ):
+    provider = get_current_provider()
+    provider_name = get_provider_display_name()
+
     if injury_snapshot is None:
         injury_snapshot = (
             build_injury_research_snapshot()
+        )
+
+    snapshot_provider = injury_snapshot.get(
+        "provider"
+    )
+
+    if (
+        snapshot_provider
+        and snapshot_provider != provider
+    ):
+        raise RuntimeError(
+            "Injury snapshot provider does not match "
+            f"the current run. Current provider: "
+            f"{provider}; snapshot provider: "
+            f"{snapshot_provider}."
         )
 
     injury_snapshot_json = json.dumps(
@@ -213,9 +336,14 @@ def build_validated_lineup(
     prompt = f"""
 Build my best starting lineup for the current fantasy week.
 
+CURRENT FANTASY PROVIDER:
+{provider_name} ({provider})
+
+Use only data belonging to this selected fantasy provider.
+
 Use:
-- my actual roster,
-- league settings,
+- my actual selected-provider roster,
+- selected-provider league settings,
 - current NFL schedule,
 - current player roles,
 - the authoritative injury snapshot below.
@@ -231,17 +359,21 @@ source-validated.
 
 Do not independently replace or reinterpret its injury facts.
 
+Use roster_status and provider_status exactly as supplied.
+
 Use exact_reported_injury exactly as supplied.
 
 Use latest_practice_participation exactly as supplied.
 
 Use official_game_status exactly as supplied.
 
-If official_game_status is "Not yet available", do not invent an
-official designation.
+If official_game_status is "Not yet available", do not invent
+an official designation.
 
-You may research current non-injury role, workload, matchup, or
-depth-chart information when useful.
+You may research current non-injury role, workload, matchup,
+or depth-chart information when useful.
+
+Do not use data from another fantasy provider or league.
 
 Return the best complete starting lineup.
 """
@@ -263,11 +395,14 @@ Return the best complete starting lineup.
         )
 
         validation = validate_plan(
-            plan
+            plan,
+            injury_snapshot=injury_snapshot,
         )
 
         if validation["is_legal"]:
             return {
+                "provider": provider,
+                "provider_name": provider_name,
                 "is_legal": True,
                 "attempts": attempt,
                 "plan": plan.model_dump(),
@@ -280,6 +415,9 @@ Return the best complete starting lineup.
         prompt = f"""
 Your previous proposed lineup failed deterministic Python
 validation.
+
+CURRENT FANTASY PROVIDER:
+{provider_name} ({provider})
 
 AUTHORITATIVE INJURY SNAPSHOT:
 
@@ -295,7 +433,7 @@ VALIDATION ERRORS:
 
 Correct the lineup.
 
-Use only current roster players.
+Use only players on the current selected-provider roster.
 
 Every required starting slot must be filled.
 
@@ -307,6 +445,8 @@ Continue using the authoritative injury snapshot exactly as
 supplied.
 
 Do not rename injuries or infer practice participation.
+
+Do not use data from another fantasy provider or league.
 
 Return a corrected complete lineup.
 """

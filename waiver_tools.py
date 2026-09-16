@@ -4,12 +4,29 @@ from pathlib import Path
 
 from agents import function_tool
 
-
-AVAILABLE_PLAYERS_FILE = (
-    Path(__file__).parent
-    / "data"
-    / "available_players.json"
+from provider_context import (
+    get_current_provider,
+    normalize_provider,
 )
+
+
+DATA_DIR = Path(__file__).parent / "data"
+
+AVAILABLE_PLAYER_FILES = {
+    "yahoo": DATA_DIR / "available_players.json",
+    "sleeper": DATA_DIR / "sleeper_available_players.json",
+}
+
+
+ALLOWED_AVAILABILITY = {
+    "yahoo": {
+        "FA",
+        "W",
+    },
+    "sleeper": {
+        "UNROSTERED",
+    },
+}
 
 
 REQUIRED_PLAYER_FIELDS = {
@@ -20,7 +37,40 @@ REQUIRED_PLAYER_FIELDS = {
 }
 
 
-def validate_available_player_snapshot(data):
+def resolve_provider(provider=None):
+    """
+    Determine which fantasy provider to use.
+
+    If a provider is explicitly supplied, use it.
+
+    Otherwise, use the provider selected for the current
+    Fantasy GM run.
+    """
+
+    if provider is None:
+        return get_current_provider()
+
+    return normalize_provider(provider)
+
+
+def validate_available_player_snapshot(
+    data,
+    provider=None,
+):
+    """
+    Validate an available-player snapshot.
+
+    Yahoo currently uses:
+      FA = free agent
+      W  = waivers
+
+    Sleeper currently uses:
+      UNROSTERED = confirmed not owned by another roster,
+                   but exact FA/waiver state is not yet known.
+    """
+
+    provider = resolve_provider(provider)
+
     if not isinstance(data, dict):
         raise RuntimeError(
             "Available-player snapshot must be a JSON object."
@@ -34,6 +84,8 @@ def validate_available_player_snapshot(data):
         )
 
     errors = []
+
+    allowed_availability = ALLOWED_AVAILABILITY[provider]
 
     for index, player in enumerate(players):
         if not isinstance(player, dict):
@@ -56,14 +108,11 @@ def validate_available_player_snapshot(data):
 
         availability = player.get("availability")
 
-        if availability not in {
-            "FA",
-            "W",
-        }:
+        if availability not in allowed_availability:
             errors.append(
                 f"{player.get('name', 'Unknown player')} has "
-                f"unsupported availability value: "
-                f"{availability}"
+                f"unsupported availability value for "
+                f"{provider}: {availability}"
             )
 
     if errors:
@@ -75,33 +124,42 @@ def validate_available_player_snapshot(data):
     return True
 
 
-def load_available_players():
+def load_available_players(
+    provider=None,
+):
     """
-    Return the authoritative available-player snapshot currently
-    available to the Fantasy GM.
+    Load the available-player snapshot for the requested
+    fantasy provider.
 
-    Today this comes from the local Yahoo snapshot file.
-
-    Once Yahoo API access is available, this function can be changed
-    to refresh from Yahoo while preserving the same return structure
-    for every other Fantasy GM component.
+    If no provider is supplied, use the provider selected
+    for the current Fantasy GM run.
     """
 
-    if not AVAILABLE_PLAYERS_FILE.exists():
+    provider = resolve_provider(provider)
+
+    available_players_file = AVAILABLE_PLAYER_FILES[provider]
+
+    if not available_players_file.exists():
         raise RuntimeError(
-            "Available-player snapshot does not exist: "
-            f"{AVAILABLE_PLAYERS_FILE}"
+            "Available-player snapshot does not exist for "
+            f"provider '{provider}': "
+            f"{available_players_file}"
         )
 
-    with open(
-        AVAILABLE_PLAYERS_FILE,
+    with available_players_file.open(
         "r",
         encoding="utf-8",
-    ) as f:
-        data = json.load(f)
+    ) as file:
+        data = json.load(file)
+
+    data.setdefault(
+        "provider",
+        provider,
+    )
 
     validate_available_player_snapshot(
-        data
+        data,
+        provider=provider,
     )
 
     return data
@@ -111,13 +169,16 @@ def save_available_players_snapshot(
     players,
     source,
     last_updated=None,
+    provider=None,
 ):
     """
-    Save available-player data using the common snapshot format.
+    Save available-player data for the requested provider.
 
-    This is the interface the future Yahoo API refresh process can
-    use after it retrieves and normalizes live Yahoo player data.
+    If no provider is supplied, use the provider selected
+    for the current Fantasy GM run.
     """
+
+    provider = resolve_provider(provider)
 
     if last_updated is None:
         last_updated = (
@@ -128,36 +189,48 @@ def save_available_players_snapshot(
         )
 
     snapshot = {
+        "provider": provider,
         "last_updated": last_updated,
         "source": source,
         "players": players,
     }
 
     validate_available_player_snapshot(
-        snapshot
+        snapshot,
+        provider=provider,
     )
 
-    AVAILABLE_PLAYERS_FILE.parent.mkdir(
+    available_players_file = AVAILABLE_PLAYER_FILES[provider]
+
+    available_players_file.parent.mkdir(
         parents=True,
         exist_ok=True,
     )
 
-    with open(
-        AVAILABLE_PLAYERS_FILE,
+    with available_players_file.open(
         "w",
         encoding="utf-8",
-    ) as f:
+    ) as file:
         json.dump(
             snapshot,
-            f,
+            file,
             indent=2,
         )
 
     return snapshot
 
 
-def build_available_player_summary():
-    data = load_available_players()
+def build_available_player_summary(
+    provider=None,
+):
+    """
+    Return deterministic available-player counts for
+    the selected fantasy provider.
+    """
+
+    provider = resolve_provider(provider)
+
+    data = load_available_players(provider)
 
     players = data.get(
         "players",
@@ -174,40 +247,74 @@ def build_available_player_summary():
         }
     )
 
+    availability_values = sorted(
+        {
+            player.get(
+                "availability",
+                "UNKNOWN",
+            )
+            for player in players
+        }
+    )
+
+    availability_counts = {
+        availability: sum(
+            1
+            for player in players
+            if player.get("availability") == availability
+        )
+        for availability in availability_values
+    }
+
     by_position = {}
 
     for position in positions:
         position_players = [
             player
             for player in players
-            if player.get(
-                "position"
-            ) == position
+            if player.get("position") == position
         ]
 
+        position_availability_counts = {
+            availability: sum(
+                1
+                for player in position_players
+                if player.get("availability") == availability
+            )
+            for availability in availability_values
+        }
+
         by_position[position] = {
-            "total": len(
-                position_players
-            ),
-            "free_agents": sum(
-                1
-                for player
-                in position_players
-                if player.get(
-                    "availability"
-                ) == "FA"
-            ),
-            "waivers": sum(
-                1
-                for player
-                in position_players
-                if player.get(
-                    "availability"
-                ) == "W"
+            "total": len(position_players),
+            "availability_counts": (
+                position_availability_counts
             ),
         }
 
-    return {
+        if provider == "yahoo":
+            by_position[position]["free_agents"] = (
+                position_availability_counts.get(
+                    "FA",
+                    0,
+                )
+            )
+            by_position[position]["waivers"] = (
+                position_availability_counts.get(
+                    "W",
+                    0,
+                )
+            )
+
+        if provider == "sleeper":
+            by_position[position]["unrostered"] = (
+                position_availability_counts.get(
+                    "UNROSTERED",
+                    0,
+                )
+            )
+
+    summary = {
+        "provider": provider,
         "last_updated": data.get(
             "last_updated"
         ),
@@ -218,49 +325,63 @@ def build_available_player_summary():
         "total_players": len(
             players
         ),
-        "free_agents": sum(
-            1
-            for player in players
-            if player.get(
-                "availability"
-            ) == "FA"
-        ),
-        "waivers": sum(
-            1
-            for player in players
-            if player.get(
-                "availability"
-            ) == "W"
-        ),
+        "availability_counts": availability_counts,
         "by_position": by_position,
     }
 
+    if provider == "yahoo":
+        summary["free_agents"] = (
+            availability_counts.get(
+                "FA",
+                0,
+            )
+        )
+        summary["waivers"] = (
+            availability_counts.get(
+                "W",
+                0,
+            )
+        )
+
+    if provider == "sleeper":
+        summary["unrostered"] = (
+            availability_counts.get(
+                "UNROSTERED",
+                0,
+            )
+        )
+
+    return summary
+
 
 @function_tool
-def get_available_players() -> str:
+def get_available_players(
+    provider: str | None = None,
+) -> str:
     """
-    Return players currently represented as available in my Yahoo
-    Fantasy Football league for waiver-wire and free-agent analysis.
+    Return players represented as available for the selected
+    fantasy provider.
 
-    The response includes source and last-updated information so the
-    caller can determine whether availability is fresh enough to use.
+    If provider is omitted, use the provider selected for
+    the current Fantasy GM run.
     """
 
     return json.dumps(
-        load_available_players(),
+        load_available_players(provider),
         indent=2,
     )
 
 
 @function_tool
-def get_available_player_summary() -> str:
+def get_available_player_summary(
+    provider: str | None = None,
+) -> str:
     """
-    Return deterministic counts of available fantasy players,
-    including totals by position, free-agent versus waiver status,
-    snapshot source, and last-updated date.
+    Return deterministic available-player counts for the
+    selected fantasy provider.
     """
 
     return json.dumps(
-        build_available_player_summary(),
+        build_available_player_summary(provider),
         indent=2,
     )

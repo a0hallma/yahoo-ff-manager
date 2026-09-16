@@ -1,12 +1,17 @@
 import json
 from datetime import datetime
+from pathlib import Path
 from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 from pydantic import BaseModel
 from agents import Agent, Runner, WebSearchTool
 
-from roster_tools import ROSTER_FILE
+from provider_context import (
+    get_current_provider,
+    get_provider_display_name,
+)
+from roster_tools import load_roster
 
 
 load_dotenv()
@@ -14,7 +19,11 @@ load_dotenv()
 
 MODEL_NAME = "gpt-5.6-luna"
 
-INJURY_SNAPSHOT_FILE = "data/injury_research_snapshot.json"
+
+INJURY_SNAPSHOT_FILES = {
+    "yahoo": Path("data/injury_research_snapshot.json"),
+    "sleeper": Path("data/sleeper_injury_research_snapshot.json"),
+}
 
 
 class InjuryResearch(BaseModel):
@@ -66,9 +75,9 @@ Research rules:
    - reputable beat reporters and major local sports reporting,
    - reputable fantasy-football reporting only when necessary.
 
-3. The Yahoo designation supplied by the program is authoritative
-   only for the Yahoo roster designation.
-   A Yahoo Q designation does NOT tell you the injury body part.
+3. The fantasy-provider roster designation supplied by the program
+   is authoritative only for that provider's roster designation.
+   A Q designation does NOT tell you the injury body part.
 
 4. exact_reported_injury must use the exact injury description
    supported by a source.
@@ -154,13 +163,59 @@ injury_research_agent = Agent(
 )
 
 
+def get_injury_snapshot_file():
+    """
+    Return the correct injury snapshot file for the currently
+    selected fantasy provider.
+    """
+
+    provider = get_current_provider()
+
+    return INJURY_SNAPSHOT_FILES[provider]
+
+
+def save_injury_snapshot(snapshot):
+    """
+    Save injury research separately for Yahoo and Sleeper so
+    one league cannot overwrite the other's research snapshot.
+    """
+
+    snapshot_file = get_injury_snapshot_file()
+
+    snapshot_file.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    with snapshot_file.open(
+        "w",
+        encoding="utf-8",
+    ) as file:
+        json.dump(
+            snapshot,
+            file,
+            indent=2,
+        )
+
+    return snapshot_file
+
+
 def load_flagged_roster_players():
-    with open(ROSTER_FILE, "r", encoding="utf-8") as f:
-        roster = json.load(f)
+    """
+    Load players with a nonblank injury/status designation from
+    the roster belonging to the currently selected provider.
+    """
+
+    provider = get_current_provider()
+
+    roster = load_roster()
 
     flagged = []
 
-    for player in roster.get("players", []):
+    for player in roster.get(
+        "players",
+        [],
+    ):
         status = (
             player.get("status")
             or ""
@@ -174,7 +229,8 @@ def load_flagged_roster_players():
                 "name": player["name"],
                 "position": player["position"],
                 "nfl_team": player["nfl_team"],
-                "yahoo_status": status,
+                "provider": provider,
+                "provider_status": status,
                 "lineup_slot": player.get(
                     "lineup_slot",
                     "",
@@ -256,7 +312,11 @@ def publisher_matches_url(
         ],
     }
 
-    for domain_fragment, allowed_names in known_domains.items():
+    for (
+        domain_fragment,
+        allowed_names,
+    ) in known_domains.items():
+
         if domain_fragment not in domain:
             continue
 
@@ -341,19 +401,30 @@ def validate_research_results(
     }
 
     if expected_names != returned_names:
-        missing = expected_names - returned_names
-        extra = returned_names - expected_names
+        missing = (
+            expected_names
+            - returned_names
+        )
+
+        extra = (
+            returned_names
+            - expected_names
+        )
 
         if missing:
             errors.append(
                 "Missing injury research for: "
-                + ", ".join(sorted(missing))
+                + ", ".join(
+                    sorted(missing)
+                )
             )
 
         if extra:
             errors.append(
                 "Unexpected injury research for: "
-                + ", ".join(sorted(extra))
+                + ", ".join(
+                    sorted(extra)
+                )
             )
 
     for player in research_report.players:
@@ -377,7 +448,9 @@ def validate_research_results(
                     publisher=(
                         player.latest_practice_source_publisher
                     ),
-                    url=player.latest_practice_source_url,
+                    url=(
+                        player.latest_practice_source_url
+                    ),
                 )
             )
 
@@ -393,7 +466,9 @@ def validate_research_results(
                     publisher=(
                         player.official_status_source_publisher
                     ),
-                    url=player.official_status_source_url,
+                    url=(
+                        player.official_status_source_url
+                    ),
                 )
             )
 
@@ -405,7 +480,9 @@ def validate_research_results(
                     publisher=(
                         player.newest_credible_update_publisher
                     ),
-                    url=player.newest_credible_update_url,
+                    url=(
+                        player.newest_credible_update_url
+                    ),
                 )
             )
 
@@ -415,40 +492,41 @@ def validate_research_results(
 def build_injury_research_snapshot(
     max_attempts=3,
 ):
-    flagged_players = load_flagged_roster_players()
+    provider = get_current_provider()
+    provider_name = get_provider_display_name()
+
+    flagged_players = (
+        load_flagged_roster_players()
+    )
 
     if not flagged_players:
         snapshot = {
+            "provider": provider,
+            "provider_name": provider_name,
             "researched_at": (
                 datetime.now()
                 .astimezone()
                 .isoformat()
             ),
             "player_count": 0,
+            "research_attempts": 0,
             "players": [],
         }
 
-        with open(
-            INJURY_SNAPSHOT_FILE,
-            "w",
-            encoding="utf-8",
-        ) as f:
-            json.dump(
-                snapshot,
-                f,
-                indent=2,
-            )
+        save_injury_snapshot(
+            snapshot
+        )
 
         return snapshot
 
     base_prompt = f"""
-Research the current injury facts for exactly these Yahoo roster
-players:
+Research the current injury facts for exactly these
+{provider_name} fantasy roster players:
 
 {json.dumps(flagged_players, indent=2)}
 
-The Yahoo status shown above is authoritative for the Yahoo
-designation only.
+The provider_status shown above is authoritative only for the
+{provider_name} roster designation.
 
 For each player, determine:
 - exact reported injury,
@@ -475,9 +553,11 @@ Do not infer practice participation.
             prompt,
         )
 
-        research_report = result.final_output_as(
-            InjuryResearchReport,
-            raise_if_incorrect_type=True,
+        research_report = (
+            result.final_output_as(
+                InjuryResearchReport,
+                raise_if_incorrect_type=True,
+            )
         )
 
         validation_errors = (
@@ -488,66 +568,101 @@ Do not infer practice participation.
         )
 
         if not validation_errors:
-            yahoo_by_name = {
-                player["name"].strip().lower(): player
+            roster_by_name = {
+                player[
+                    "name"
+                ].strip().lower(): player
                 for player in flagged_players
             }
 
             players = []
 
-            for researched_player in research_report.players:
+            for researched_player in (
+                research_report.players
+            ):
                 research_data = (
                     researched_player.model_dump()
                 )
 
-                yahoo_player = yahoo_by_name[
-                    researched_player
-                    .player_name
-                    .strip()
-                    .lower()
+                roster_player = (
+                    roster_by_name[
+                        researched_player
+                        .player_name
+                        .strip()
+                        .lower()
+                    ]
+                )
+
+                research_data[
+                    "provider"
+                ] = provider
+
+                research_data[
+                    "provider_status"
+                ] = roster_player[
+                    "provider_status"
                 ]
 
-                research_data["yahoo_status"] = (
-                    yahoo_player["yahoo_status"]
+                # Generic name for all downstream code going forward.
+                research_data[
+                    "roster_status"
+                ] = roster_player[
+                    "provider_status"
+                ]
+
+                # Preserve the legacy Yahoo field only for Yahoo.
+                # This avoids breaking the existing Yahoo report while
+                # keeping Sleeper semantically correct.
+                research_data[
+                    "yahoo_status"
+                ] = (
+                    roster_player[
+                        "provider_status"
+                    ]
+                    if provider == "yahoo"
+                    else None
                 )
 
-                research_data["position"] = (
-                    yahoo_player["position"]
-                )
+                research_data[
+                    "position"
+                ] = roster_player[
+                    "position"
+                ]
 
-                research_data["nfl_team"] = (
-                    yahoo_player["nfl_team"]
-                )
+                research_data[
+                    "nfl_team"
+                ] = roster_player[
+                    "nfl_team"
+                ]
 
-                research_data["roster_lineup_slot"] = (
-                    yahoo_player["lineup_slot"]
-                )
+                research_data[
+                    "roster_lineup_slot"
+                ] = roster_player[
+                    "lineup_slot"
+                ]
 
                 players.append(
                     research_data
                 )
 
             snapshot = {
+                "provider": provider,
+                "provider_name": provider_name,
                 "researched_at": (
                     datetime.now()
                     .astimezone()
                     .isoformat()
                 ),
-                "player_count": len(players),
+                "player_count": len(
+                    players
+                ),
                 "research_attempts": attempt,
                 "players": players,
             }
 
-            with open(
-                INJURY_SNAPSHOT_FILE,
-                "w",
-                encoding="utf-8",
-            ) as f:
-                json.dump(
-                    snapshot,
-                    f,
-                    indent=2,
-                )
+            save_injury_snapshot(
+                snapshot
+            )
 
             return snapshot
 

@@ -18,8 +18,10 @@ def describe_lineup_changes(
     changes = []
 
     for slot, base_player in base_lineup.items():
-        contingency_player = contingency_lineup.get(
-            slot
+        contingency_player = (
+            contingency_lineup.get(
+                slot
+            )
         )
 
         if contingency_player == base_player:
@@ -46,47 +48,94 @@ def render_validated_contingencies(
 ):
     lines = []
 
-    availability_check = availability_check or {}
-
-    availability_is_fresh = availability_check.get(
-        "is_fresh",
-        True,
+    provider = (
+        validated_contingencies.get(
+            "provider",
+            "yahoo",
+        )
     )
 
-    snapshot_age_days = availability_check.get(
-        "age_days"
+    provider_name = (
+        validated_contingencies.get(
+            "provider_name",
+            provider.title(),
+        )
     )
 
-    snapshot_last_updated = availability_check.get(
-        "last_updated"
+    availability_check = (
+        availability_check
+        or {}
     )
 
-    for contingency in validated_contingencies[
-        "contingencies"
-    ]:
+    availability_is_fresh = (
+        availability_check.get(
+            "is_fresh",
+            True,
+        )
+    )
+
+    snapshot_age_days = (
+        availability_check.get(
+            "age_days"
+        )
+    )
+
+    snapshot_last_updated = (
+        availability_check.get(
+            "last_updated"
+        )
+    )
+
+    for contingency in (
+        validated_contingencies[
+            "contingencies"
+        ]
+    ):
         player = contingency[
             "unavailable_player"
         ]
 
-        yahoo_status = contingency.get(
-            "yahoo_status",
-            "",
+        roster_status = (
+            contingency.get(
+                "roster_status"
+            )
+            or contingency.get(
+                "provider_status"
+            )
+            or contingency.get(
+                "yahoo_status"
+            )
+            or ""
         )
 
-        lines.append(
-            f"**{player} — Yahoo {yahoo_status}**"
-        )
+        if roster_status:
+            lines.append(
+                f"**{player} — "
+                f"{provider_name} "
+                f"{roster_status}**"
+            )
+
+        else:
+            lines.append(
+                f"**{player}**"
+            )
 
         if contingency[
             "has_on_roster_contingency"
         ]:
-            validated_lineup = contingency[
-                "validation"
-            ]["contingency_lineup"]
+            validated_lineup = (
+                contingency[
+                    "validation"
+                ][
+                    "contingency_lineup"
+                ]
+            )
 
-            changes = describe_lineup_changes(
-                base_lineup,
-                validated_lineup,
+            changes = (
+                describe_lineup_changes(
+                    base_lineup,
+                    validated_lineup,
+                )
             )
 
             lines.append(
@@ -110,71 +159,141 @@ def render_validated_contingencies(
                 "at this player's kickoff.**"
             )
 
-            emergency_options = contingency.get(
-                "emergency_free_agents",
-                [],
-            )
-
-            direct_options = [
-                option
-                for option in emergency_options
-                if option.get(
-                    "direct_replacement_for_current_slot"
-                )
-            ]
-
-            if direct_options:
-                if availability_is_fresh:
-                    lines.append(
-                        "- **Confirmed emergency free-agent options:**"
+            if provider == "yahoo":
+                emergency_options = (
+                    contingency.get(
+                        "emergency_free_agents",
+                        [],
                     )
+                )
 
-                    for option in direct_options:
+                direct_options = [
+                    option
+                    for option
+                    in emergency_options
+                    if option.get(
+                        "direct_replacement_for_current_slot"
+                    )
+                ]
+
+                if direct_options:
+                    if availability_is_fresh:
                         lines.append(
-                            f"  - {option['name']} — "
-                            f"{option['position']}, "
-                            f"{option['nfl_team']} vs. "
-                            f"{option['opponent']}"
+                            "- **Confirmed emergency "
+                            "free-agent options:**"
                         )
+
+                        for option in direct_options:
+                            lines.append(
+                                f"  - {option['name']} — "
+                                f"{option['position']}, "
+                                f"{option['nfl_team']} vs. "
+                                f"{option['opponent']}"
+                            )
+
+                    else:
+                        lines.append(
+                            "- **Emergency candidates from the "
+                            "last Yahoo snapshot:**"
+                        )
+
+                        for option in direct_options:
+                            lines.append(
+                                f"  - {option['name']} — "
+                                f"{option['position']}, "
+                                f"{option['nfl_team']} vs. "
+                                f"{option['opponent']}"
+                            )
+
+                        lines.append(
+                            "- **Availability not confirmed:** "
+                            "Refresh Yahoo before relying on "
+                            "or adding any candidate above."
+                        )
+
+                        if (
+                            snapshot_age_days
+                            is not None
+                        ):
+                            lines.append(
+                                f"- Snapshot age: "
+                                f"{snapshot_age_days} "
+                                "day(s)."
+                            )
+
+                        if snapshot_last_updated:
+                            lines.append(
+                                "- Snapshot last updated: "
+                                f"{snapshot_last_updated}."
+                            )
 
                 else:
                     lines.append(
-                        "- **Emergency candidates from the "
-                        "last Yahoo snapshot:**"
+                        "- **Emergency free-agent options:** "
+                        "None identified in the current "
+                        "available-player snapshot."
                     )
 
-                    for option in direct_options:
-                        lines.append(
-                            f"  - {option['name']} — "
-                            f"{option['position']}, "
-                            f"{option['nfl_team']} vs. "
-                            f"{option['opponent']}"
-                        )
+            elif provider == "sleeper":
+                acquisition_candidates = (
+                    contingency.get(
+                        "acquisition_candidates",
+                        [],
+                    )
+                )
+
+                direct_candidates = [
+                    option
+                    for option
+                    in acquisition_candidates
+                    if option.get(
+                        "direct_replacement_for_current_slot"
+                    )
+                ]
+
+                if direct_candidates:
+                    lines.append(
+                        "- **Sleeper acquisition status:** "
+                        f"{len(direct_candidates)} unrostered "
+                        "player(s) could fit this lineup slot, "
+                        "but immediate addability has not been "
+                        "confirmed."
+                    )
 
                     lines.append(
-                        "- **Availability not confirmed:** "
-                        "Refresh Yahoo before relying on "
-                        "or adding any candidate above."
+                        "- **No emergency acquisition is "
+                        "presented as executable until "
+                        "Sleeper waiver/addability state "
+                        "is verified.**"
                     )
 
-                    if snapshot_age_days is not None:
-                        lines.append(
-                            f"- Snapshot age: "
-                            f"{snapshot_age_days} day(s)."
-                        )
+                else:
+                    lines.append(
+                        "- **Sleeper acquisition status:** "
+                        "No unrostered direct replacement "
+                        "was identified."
+                    )
 
-                    if snapshot_last_updated:
-                        lines.append(
-                            f"- Snapshot last updated: "
-                            f"{snapshot_last_updated}."
-                        )
+                acquisition_warning = (
+                    contingency.get(
+                        "acquisition_warning"
+                    )
+                )
+
+                if acquisition_warning:
+                    lines.append(
+                        f"- {acquisition_warning}"
+                    )
 
             else:
                 lines.append(
-                    "- **Emergency free-agent options:** "
-                    "None identified in the available-player snapshot."
+                    "- **Emergency acquisition status:** "
+                    "Provider-specific addability rules "
+                    "have not been established."
                 )
 
         lines.append("")
 
-    return "\n".join(lines).rstrip()
+    return "\n".join(
+        lines
+    ).rstrip()
