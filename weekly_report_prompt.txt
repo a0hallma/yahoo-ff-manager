@@ -1,0 +1,331 @@
+Perform my complete weekly fantasy football roster audit.
+
+Use the fantasy provider selected for the current run.
+
+Use my actual league settings, current roster, available-player data,
+authoritative validated lineup, authoritative injury snapshot, authoritative
+validated contingencies, and authoritative validated transaction supplied
+with this prompt.
+
+Do not mix roster, league, availability, transaction, injury, schedule,
+or contingency data between fantasy providers.
+
+Research current-season information when useful for non-injury football
+context such as player role, workload, depth chart, matchup, transactions,
+and other material news.
+
+Do not independently replace or reinterpret injury facts contained in the
+authoritative injury snapshot.
+
+Before making any schedule-related recommendation:
+- Call get_roster_schedule.
+- Call get_next_roster_lock.
+- Treat those results as authoritative for opponent, game date, kickoff
+  time, and the next roster lock.
+- Do not reconstruct the NFL schedule from memory or general web research.
+
+Use the authoritative validated lineup supplied with this prompt for all
+recommendations.
+
+Do not create a different starting lineup unless discussing an independently
+validated contingency supplied with this prompt.
+
+The goal is to optimize my roster to maximize my probability of winning the
+current fantasy matchup while preserving longer-term roster value.
+
+The WEEKLY LINEUP section is generated separately by Python.
+
+Do not output Section 1.
+
+Begin your response with:
+
+## 2. EARLY-GAME LOCKS
+
+
+2. EARLY-GAME LOCKS
+
+Identify every roster player whose NFL game occurs before the main Sunday
+1:00 PM Eastern slate.
+
+This can include Wednesday, Thursday, Friday, Saturday, Sunday morning
+international games, Thanksgiving, Christmas, or other special NFL
+scheduling.
+
+For each affected player provide:
+- Player
+- Opponent
+- Game date
+- Kickoff time Eastern
+- START, BENCH, or MONITOR
+- Action required before that player's game locks
+
+If an injured or questionable player's inactive contingency has already been
+independently validated, do not restate or reconstruct the lineup changes in
+this section.
+
+Instead say:
+
+"If inactive, follow the validated contingency in Section 3."
+
+Do not invent a different contingency.
+
+Identify the single earliest upcoming kickoff involving anyone on my roster
+and label it:
+
+NEXT ROSTER LOCK:
+<date and time>
+
+Do not assume Thursday is the first relevant game.
+
+
+3. INJURY REPORT
+
+Use the AUTHORITATIVE INJURY SNAPSHOT supplied with this prompt as the single
+source of truth for injury facts.
+
+For each relevant injured or questionable player, preserve exactly:
+- provider_status / roster_status
+- exact_reported_injury
+- latest_practice_date
+- latest_practice_participation
+- official_game_status
+- newest credible update
+
+Rules:
+- The fantasy-provider roster status is not itself an official NFL injury
+  report.
+- Do not rename, translate, broaden, or generalize an injury.
+- Do not infer a body part.
+- Do not convert psoas soreness into groin injury.
+- If latest_practice_participation is "Not specified", do not infer Full,
+  Limited, or Did Not Participate.
+- If official_game_status is "Not yet available", do not invent an official
+  designation.
+- Reporter expectations are not official game statuses.
+- Do not independently research injury facts that contradict or replace the
+  supplied snapshot.
+- Older training-camp or preseason injury information may be identified as
+  background only.
+- Schefter or Rapoport information may only be reported as represented in
+  the authoritative injury snapshot.
+
+Rank injury situations:
+
+### CRITICAL
+
+### WATCH
+
+### LOW CONCERN
+
+Rank players based on how materially their status affects the validated
+starting lineup and roster decisions.
+
+Do not write or paraphrase exact contingency lineup changes yourself.
+
+After the injury-fact analysis, output exactly:
+
+[[VALIDATED_CONTINGENCIES]]
+
+Do not alter, explain, decorate, or duplicate this marker.
+
+Python will replace it with the independently validated contingency plans.
+
+
+4. MATCHUP AND ROLE NOTES
+
+Only identify matchup, role, workload, or depth-chart information material
+enough to affect a fantasy decision.
+
+Do not manufacture projected touches, targets, snap percentages, or usage.
+
+Do not contradict the authoritative validated lineup.
+
+Do not independently restate contingency lineup changes.
+
+
+5. ROSTER MOVES
+
+Do not generate Section 5 yourself.
+
+At the exact location where Section 5 belongs, output exactly:
+
+[[ROSTER_MOVES_SECTION]]
+
+Do not add any other text for Section 5.
+Do not alter, explain, decorate, or duplicate this marker.
+
+Python will replace the marker with the independently validated transaction
+section.
+
+Do not recommend a different specific add/drop transaction.
+
+Transaction rules:
+- If transaction_blocked=true, do not describe the result as standing pat.
+- If transaction_blocked=true, state elsewhere only when relevant that
+  executable roster-move analysis is blocked pending required provider data.
+- If transaction_blocked=true, do not claim any specific acquisition is
+  executable.
+- If transaction_blocked=false and recommend_move=false, standing pat is the
+  authoritative transaction decision.
+- If transaction_blocked=false and recommend_move=true, use the exact
+  validated add player and exact validated drop player.
+- Preserve the provider's validated acquisition state exactly.
+- Preserve waiver date, FAAB, waiver priority, or other acquisition metadata
+  only when actually supplied by the validated transaction.
+- Do not translate an UNROSTERED state into free agent or waiver claim.
+- Do not claim another specific transaction is executable unless it has been
+  independently validated.
+
+
+6. ROSTER CONSTRUCTION
+
+Identify:
+- Excess positional depth
+- Weak positional depth
+- Bye-week problems
+- IR or reserve opportunities when the league supports them
+- Players whose roster spots are becoming expendable
+
+Use the authoritative validated transaction when discussing the resulting
+roster.
+
+If transaction_blocked=true, do not describe the roster as intentionally
+standing pat because of football value.
+
+Instead distinguish:
+- no worthwhile move exists, from
+- executable transaction analysis is currently blocked.
+
+Do not recommend a conflicting add/drop move.
+
+
+7. SUNDAY WATCH LIST
+
+List only situations that actually need to be checked Sunday.
+
+For each item state:
+- Player or situation
+- What must be checked
+- Relevant kickoff or decision deadline when applicable
+
+Do not reconstruct or paraphrase validated contingency lineup changes.
+
+If a validated contingency is needed, say:
+
+"Follow the validated contingency in Section 3."
+
+Do not recommend securing an external player unless that player appears in
+authoritative provider data and the validated transaction or contingency data
+establishes that the acquisition is executable.
+
+An unrostered player is not necessarily an immediately addable player.
+
+Remember that available-player data may be stale if DATA HEALTH reported a
+freshness warning.
+
+
+8. TRADE OPPORTUNITIES
+
+Output exactly this marker under the heading and nothing else:
+
+[[VALIDATED_TRADE_PLAN]]
+
+Do not independently analyze, recommend, reject, summarize, or modify trades.
+Do not name any trade target outside the marker.
+The validated trade section will be inserted by Python after report generation.
+Preserve the marker exactly once.
+
+9. ACTION PLAN
+
+Finish with a concise ordered checklist.
+
+Use exactly these categories:
+
+DO NOW:
+1.
+2.
+
+
+BEFORE NEXT EARLY KICKOFF:
+State the day and Eastern kickoff time of the earliest upcoming NFL game
+involving one of my rostered players.
+1.
+2.
+
+CHECK SUNDAY:
+1.
+2.
+
+If there are no actions in a category, say NONE.
+
+Do not restate exact contingency lineup changes.
+
+When a contingency becomes necessary, say:
+
+"Follow the validated contingency in Section 3."
+
+Do not make a roster change merely for the sake of making a change.
+
+If transaction_blocked=true, do not tell me to execute a specific add/drop.
+
+Preserving roster value and preserving acquisition resources such as waiver
+priority or FAAB, when applicable to the selected league, are valid
+recommendations.
+
+
+FORMAT RULES
+
+- Output exactly Sections 2 through 9.
+- Do not output Section 1. Python renders Section 1 separately.
+- ACTION PLAN must remain Section 9.
+- Do not add additional numbered sections.
+- Section 3 must contain exactly one [[VALIDATED_CONTINGENCIES]] marker.
+- Section 5 must contain exactly one [[ROSTER_MOVES_SECTION]] marker.
+- Do not place either marker anywhere else.
+- Do not output a second WEEKLY LINEUP section.
+- Do not independently generate exact contingency lineup changes.
+- Do not independently generate a different add/drop transaction.
+- Keep recommendations consistent with the authoritative validated lineup,
+  injury snapshot, validated contingencies, and validated transaction.
+- Never mix data from another fantasy provider or league into the report.
+REPORT SAFETY RULES
+
+- There is no assumed global Sunday lineup lock.
+- Use each player's actual NFL kickoff from the authoritative schedule as that player's relevant decision deadline.
+- Never say that all Sunday players lock at 1:00 PM Eastern.
+- Do not create monitoring concern merely because a healthy player plays Monday.
+- If the authoritative injury snapshot contains no injury/status concern for a player, do not invent one.
+
+- Only reference a "validated contingency in Section 3" for a player who actually appears in the authoritative validated contingency data.
+- If candidate_count=0, do not tell me to follow a validated contingency anywhere in Sections 2 through 9.
+- If a specific player has no validated contingency, do not imply that one exists.
+- If a new injury or status change occurs for a player without a validated contingency, state that the lineup must be re-evaluated.
+
+TRADE REPORT SAFETY RULES
+
+- Section 8 may only recommend or rule out trades when current league-wide roster data is available.
+- If opposing-team roster data is not present in the authoritative report input, output:
+  "Trade analysis not evaluated because current opposing-team rosters were not supplied."
+- Do not output "No trades are worth exploring this week" merely because no opposing roster data was provided.
+
+SUNDAY RECHECK RULES
+
+- Even when the authoritative injury snapshot contains zero current concerns, a routine Sunday status recheck is appropriate because player availability can change after the weekly report is generated.
+- Clearly distinguish a routine Sunday recheck from monitoring a known injury or status concern.
+- Do not imply that a healthy player currently has an injury concern merely because a Sunday recheck is recommended.
+- Use each player's actual kickoff time when describing when status should be rechecked.
+- Do not describe all Sunday players as having a 1:00 PM Eastern deadline when some play later.
+
+TRADE SPECIFICITY RULES
+
+- Do not present a team-level trade idea without identifying a specific player target currently rostered by that team.
+- Every trade opportunity must identify:
+  - the specific target player,
+  - the fantasy team that currently rosters that player,
+  - the roster need or upgrade the target would address,
+  - and why my roster construction could support exploring that trade.
+- Fantasy ownership must come only from the authoritative league-wide roster data.
+- Do not invent a specific offer unless there is enough current player-value evidence to support both sides of the proposed exchange.
+- If there is not enough evidence for a specific offer, identify the target and trade partner but state that offer construction still requires value analysis.
+- Do not recommend acquiring a backup QB or TE merely because my roster only contains one. In a one-QB or one-TE league, consider positional scarcity, replacement value, bye-week timing, starter quality, and whether the trade would materially improve the roster.
+- Prefer trades that improve starting-lineup quality, meaningful injury/bye insurance, or roster flexibility over trades that simply fill every bench position.
