@@ -1,6 +1,6 @@
-import json
+﻿import json
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -24,10 +24,61 @@ CACHE_FILE = (
 
 EASTERN = ZoneInfo("America/New_York")
 
+ESPN_URL = (
+    "https://site.api.espn.com/apis/site/v2/"
+    "sports/football/nfl/scoreboard"
+)
+
 NFL_URL = (
     "https://www.nfl.com/schedules/"
     "{season}/by-week/week-{week}"
 )
+
+MIN_EXPECTED_GAMES = 8
+MAX_CACHE_AGE_HOURS = 96
+
+
+NFL_TEAMS = {
+    "ARI",
+    "ATL",
+    "BAL",
+    "BUF",
+    "CAR",
+    "CHI",
+    "CIN",
+    "CLE",
+    "DAL",
+    "DEN",
+    "DET",
+    "GB",
+    "HOU",
+    "IND",
+    "JAX",
+    "KC",
+    "LV",
+    "LAC",
+    "LAR",
+    "MIA",
+    "MIN",
+    "NE",
+    "NO",
+    "NYG",
+    "NYJ",
+    "PHI",
+    "PIT",
+    "SF",
+    "SEA",
+    "TB",
+    "TEN",
+    "WAS",
+}
+
+
+TEAM_ALIASES = {
+    "JAC": "JAX",
+    "WSH": "WAS",
+    "LA": "LAR",
+}
 
 
 TEAM_ABBREVIATIONS = {
@@ -106,10 +157,6 @@ def get_season_and_week():
     """
     Get the season and fantasy week from the currently
     selected provider.
-
-    Yahoo and Sleeper can therefore maintain separate
-    roster snapshots without schedule_tools knowing
-    their file names.
     """
 
     league = load_league_settings()
@@ -126,6 +173,154 @@ def get_season_and_week():
     return season, week
 
 
+def normalize_team_abbreviation(value):
+    value = str(
+        value or ""
+    ).strip().upper()
+
+    value = TEAM_ALIASES.get(
+        value,
+        value,
+    )
+
+    if value not in NFL_TEAMS:
+        raise RuntimeError(
+            (
+                "Unknown NFL team abbreviation "
+                f"returned by schedule source: {value!r}"
+            )
+        )
+
+    return value
+
+
+def parse_iso_datetime(value):
+    value = str(
+        value or ""
+    ).strip()
+
+    if not value:
+        raise RuntimeError(
+            "Schedule event did not contain a kickoff time."
+        )
+
+    if value.endswith("Z"):
+        value = (
+            value[:-1]
+            + "+00:00"
+        )
+
+    kickoff = datetime.fromisoformat(
+        value
+    )
+
+    if kickoff.tzinfo is None:
+        raise RuntimeError(
+            (
+                "Schedule kickoff did not contain "
+                "timezone information."
+            )
+        )
+
+    return kickoff.astimezone(
+        EASTERN
+    )
+
+
+def validate_games(
+    games,
+    source_name,
+    expected_count=None,
+):
+    if len(games) < MIN_EXPECTED_GAMES:
+        raise RuntimeError(
+            (
+                f"Only {len(games)} games were parsed "
+                f"from {source_name}."
+            )
+        )
+
+    if (
+        expected_count is not None
+        and len(games) != expected_count
+    ):
+        raise RuntimeError(
+            (
+                f"{source_name} returned "
+                f"{expected_count} events but only "
+                f"{len(games)} valid games were parsed."
+            )
+        )
+
+    seen_matchups = set()
+    seen_teams = set()
+
+    for game in games:
+        away = normalize_team_abbreviation(
+            game.get("away")
+        )
+
+        home = normalize_team_abbreviation(
+            game.get("home")
+        )
+
+        if away == home:
+            raise RuntimeError(
+                (
+                    f"Invalid {source_name} matchup: "
+                    f"{away} vs {home}."
+                )
+            )
+
+        matchup = (
+            away,
+            home,
+        )
+
+        if matchup in seen_matchups:
+            raise RuntimeError(
+                (
+                    f"Duplicate {source_name} matchup: "
+                    f"{away} at {home}."
+                )
+            )
+
+        if (
+            away in seen_teams
+            or home in seen_teams
+        ):
+            raise RuntimeError(
+                (
+                    f"{source_name} returned a team "
+                    "more than once in the same week."
+                )
+            )
+
+        kickoff = datetime.fromisoformat(
+            game["kickoff"]
+        )
+
+        if kickoff.tzinfo is None:
+            raise RuntimeError(
+                (
+                    f"{source_name} returned a kickoff "
+                    "without timezone information."
+                )
+            )
+
+        seen_matchups.add(
+            matchup
+        )
+
+        seen_teams.add(
+            away
+        )
+
+        seen_teams.add(
+            home
+        )
+
+
 def build_kickoff(
     season,
     month,
@@ -140,8 +335,6 @@ def build_kickoff(
         ).month
     )
 
-    # NFL regular seasons cross into January
-    # of the following calendar year.
     calendar_year = (
         season + 1
         if month_number <= 2
@@ -165,6 +358,11 @@ def build_kickoff(
 
 
 def save_cache(data):
+    CACHE_FILE.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
     with CACHE_FILE.open(
         "w",
         encoding="utf-8",
@@ -183,14 +381,74 @@ def load_cache(
     if not CACHE_FILE.exists():
         return None
 
-    data = load_json(
-        CACHE_FILE
-    )
+    try:
+        data = load_json(
+            CACHE_FILE
+        )
+    except Exception:
+        return None
 
     if (
-        data.get("season") != season
-        or data.get("week") != week
+        int(
+            data.get(
+                "season",
+                -1,
+            )
+        )
+        != season
+        or int(
+            data.get(
+                "week",
+                -1,
+            )
+        )
+        != week
     ):
+        return None
+
+    games = data.get(
+        "games",
+        [],
+    )
+
+    try:
+        validate_games(
+            games,
+            "cached schedule",
+        )
+    except Exception:
+        return None
+
+    fetched_at = data.get(
+        "fetched_at"
+    )
+
+    if not fetched_at:
+        return None
+
+    try:
+        fetched = datetime.fromisoformat(
+            fetched_at
+        )
+
+        if fetched.tzinfo is None:
+            return None
+
+        age = (
+            datetime.now(
+                EASTERN
+            )
+            - fetched.astimezone(
+                EASTERN
+            )
+        )
+
+        if age > timedelta(
+            hours=MAX_CACHE_AGE_HOURS
+        ):
+            return None
+
+    except Exception:
         return None
 
     data["using_cache"] = True
@@ -198,126 +456,312 @@ def load_cache(
     return data
 
 
-def fetch_official_schedule():
-    season, week = get_season_and_week()
+def fetch_espn_schedule(
+    season,
+    week,
+):
+    response = requests.get(
+        ESPN_URL,
+        params={
+            "dates": str(
+                season
+            ),
+            "seasontype": "2",
+            "week": str(
+                week
+            ),
+        },
+        headers={
+            "User-Agent": (
+                "Mozilla/5.0 "
+                "(Windows NT 10.0; "
+                "Win64; x64)"
+            )
+        },
+        timeout=20,
+    )
 
+    response.raise_for_status()
+
+    payload = response.json()
+
+    events = payload.get(
+        "events",
+        [],
+    )
+
+    if not events:
+        raise RuntimeError(
+            (
+                "ESPN returned no NFL events for "
+                f"{season} Week {week}."
+            )
+        )
+
+    games = []
+    seen = set()
+
+    for event in events:
+        competitions = event.get(
+            "competitions",
+            [],
+        )
+
+        if not competitions:
+            raise RuntimeError(
+                (
+                    "ESPN schedule event did not "
+                    "contain a competition."
+                )
+            )
+
+        competition = competitions[0]
+
+        competitors = competition.get(
+            "competitors",
+            [],
+        )
+
+        away = None
+        home = None
+
+        for competitor in competitors:
+            team = competitor.get(
+                "team",
+                {},
+            )
+
+            abbreviation = (
+                normalize_team_abbreviation(
+                    team.get(
+                        "abbreviation"
+                    )
+                )
+            )
+
+            home_away = str(
+                competitor.get(
+                    "homeAway",
+                    ""
+                )
+            ).strip().lower()
+
+            if home_away == "away":
+                away = abbreviation
+
+            elif home_away == "home":
+                home = abbreviation
+
+        if not away or not home:
+            raise RuntimeError(
+                (
+                    "ESPN schedule event did not "
+                    "contain both home and away teams."
+                )
+            )
+
+        kickoff_value = (
+            event.get(
+                "date"
+            )
+            or competition.get(
+                "date"
+            )
+        )
+
+        kickoff = parse_iso_datetime(
+            kickoff_value
+        )
+
+        game_key = (
+            away,
+            home,
+            kickoff.isoformat(),
+        )
+
+        if game_key in seen:
+            continue
+
+        seen.add(
+            game_key
+        )
+
+        games.append(
+            {
+                "away": away,
+                "home": home,
+                "kickoff": (
+                    kickoff.isoformat()
+                ),
+            }
+        )
+
+    validate_games(
+        games,
+        "ESPN",
+        expected_count=len(
+            events
+        ),
+    )
+
+    return {
+        "season": season,
+        "week": week,
+        "source": "ESPN",
+        "source_url": (
+            response.url
+        ),
+        "fetched_at": (
+            datetime.now(
+                EASTERN
+            ).isoformat()
+        ),
+        "using_cache": False,
+        "games": games,
+    }
+
+
+def fetch_nfl_com_schedule(
+    season,
+    week,
+):
     url = NFL_URL.format(
         season=season,
         week=week,
     )
 
-    try:
-        response = requests.get(
-            url,
-            headers={
-                "User-Agent": (
-                    "Mozilla/5.0 "
-                    "(Windows NT 10.0; "
-                    "Win64; x64) "
-                    "AppleWebKit/537.36 "
-                    "Chrome/151 Safari/537.36"
-                )
-            },
-            timeout=20,
+    response = requests.get(
+        url,
+        headers={
+            "User-Agent": (
+                "Mozilla/5.0 "
+                "(Windows NT 10.0; "
+                "Win64; x64) "
+                "AppleWebKit/537.36 "
+                "Chrome/151 Safari/537.36"
+            )
+        },
+        timeout=20,
+    )
+
+    response.raise_for_status()
+
+    soup = BeautifulSoup(
+        response.text,
+        "html.parser",
+    )
+
+    page_text = " ".join(
+        soup.stripped_strings
+    )
+
+    games = []
+    seen = set()
+
+    for match in GAME_PATTERN.finditer(
+        page_text
+    ):
+        away_name = match.group(
+            "away"
         )
 
-        response.raise_for_status()
-
-        soup = BeautifulSoup(
-            response.text,
-            "html.parser",
+        home_name = match.group(
+            "home"
         )
 
-        page_text = " ".join(
-            soup.stripped_strings
-        )
+        away = TEAM_ABBREVIATIONS[
+            away_name
+        ]
 
-        games = []
-        seen = set()
+        home = TEAM_ABBREVIATIONS[
+            home_name
+        ]
 
-        for match in GAME_PATTERN.finditer(
-            page_text
-        ):
-            away_name = match.group(
-                "away"
-            )
-
-            home_name = match.group(
-                "home"
-            )
-
-            away = TEAM_ABBREVIATIONS[
-                away_name
-            ]
-
-            home = TEAM_ABBREVIATIONS[
-                home_name
-            ]
-
-            kickoff = build_kickoff(
-                season,
-                match.group(
-                    "month"
-                ),
-                int(
-                    match.group(
-                        "day"
-                    )
-                ),
-                match.group(
-                    "time"
-                ),
-                match.group(
-                    "ampm"
-                ).upper(),
-            )
-
-            game_key = (
-                away,
-                home,
-                kickoff.isoformat(),
-            )
-
-            if game_key in seen:
-                continue
-
-            seen.add(
-                game_key
-            )
-
-            games.append(
-                {
-                    "away": away,
-                    "home": home,
-                    "kickoff": (
-                        kickoff.isoformat()
-                    ),
-                }
-            )
-
-        # If NFL.com changes its page structure,
-        # do not silently trust an incomplete result.
-        if len(games) < 8:
-            raise RuntimeError(
-                (
-                    f"Only {len(games)} games "
-                    f"were parsed from NFL.com."
-                )
-            )
-
-        data = {
-            "season": season,
-            "week": week,
-            "source": "NFL.com",
-            "source_url": url,
-            "fetched_at": (
-                datetime.now(
-                    EASTERN
-                ).isoformat()
+        kickoff = build_kickoff(
+            season,
+            match.group(
+                "month"
             ),
-            "using_cache": False,
-            "games": games,
-        }
+            int(
+                match.group(
+                    "day"
+                )
+            ),
+            match.group(
+                "time"
+            ),
+            match.group(
+                "ampm"
+            ).upper(),
+        )
+
+        game_key = (
+            away,
+            home,
+            kickoff.isoformat(),
+        )
+
+        if game_key in seen:
+            continue
+
+        seen.add(
+            game_key
+        )
+
+        games.append(
+            {
+                "away": away,
+                "home": home,
+                "kickoff": (
+                    kickoff.isoformat()
+                ),
+            }
+        )
+
+    validate_games(
+        games,
+        "NFL.com",
+    )
+
+    return {
+        "season": season,
+        "week": week,
+        "source": "NFL.com",
+        "source_url": url,
+        "fetched_at": (
+            datetime.now(
+                EASTERN
+            ).isoformat()
+        ),
+        "using_cache": False,
+        "games": games,
+    }
+
+
+def fetch_official_schedule():
+    """
+    Fetch the current NFL weekly schedule.
+
+    Primary source:
+      ESPN structured scoreboard endpoint.
+
+    Secondary source:
+      NFL.com HTML parser.
+
+    Final fallback:
+      Previously validated same-week cache, no older
+      than MAX_CACHE_AGE_HOURS.
+    """
+
+    season, week = get_season_and_week()
+
+    errors = []
+
+    try:
+        data = fetch_espn_schedule(
+            season,
+            week,
+        )
 
         save_cache(
             data
@@ -326,25 +770,56 @@ def fetch_official_schedule():
         return data
 
     except Exception as exc:
-        cached = load_cache(
+        errors.append(
+            f"ESPN: {exc}"
+        )
+
+    try:
+        data = fetch_nfl_com_schedule(
             season,
             week,
         )
 
-        if cached:
-            cached[
-                "fetch_error"
-            ] = str(exc)
+        data[
+            "fallback_errors"
+        ] = list(
+            errors
+        )
 
-            return cached
+        save_cache(
+            data
+        )
 
-        raise RuntimeError(
-            (
-                "Unable to retrieve the NFL "
-                "schedule and no matching cache "
-                f"exists: {exc}"
+        return data
+
+    except Exception as exc:
+        errors.append(
+            f"NFL.com: {exc}"
+        )
+
+    cached = load_cache(
+        season,
+        week,
+    )
+
+    if cached:
+        cached[
+            "fetch_error"
+        ] = " | ".join(
+            errors
+        )
+
+        return cached
+
+    raise RuntimeError(
+        (
+            "Unable to retrieve the NFL schedule "
+            "and no valid matching cache exists: "
+            + " | ".join(
+                errors
             )
         )
+    )
 
 
 def build_roster_schedule():
@@ -354,7 +829,9 @@ def build_roster_schedule():
     """
 
     provider = get_current_provider()
-    provider_name = get_provider_display_name()
+    provider_name = (
+        get_provider_display_name()
+    )
 
     schedule = (
         fetch_official_schedule()
@@ -395,9 +872,11 @@ def build_roster_schedule():
     for player in roster[
         "players"
     ]:
-        team = player[
-            "nfl_team"
-        ]
+        team = normalize_team_abbreviation(
+            player[
+                "nfl_team"
+            ]
+        )
 
         game = games_by_team.get(
             team
@@ -472,6 +951,11 @@ def build_roster_schedule():
                 "source"
             ]
         ),
+        "schedule_source_url": (
+            schedule.get(
+                "source_url"
+            )
+        ),
         "schedule_fetched_at": (
             schedule[
                 "fetched_at"
@@ -486,6 +970,12 @@ def build_roster_schedule():
         "fetch_error": (
             schedule.get(
                 "fetch_error"
+            )
+        ),
+        "fallback_errors": (
+            schedule.get(
+                "fallback_errors",
+                [],
             )
         ),
         "players": players,
@@ -570,6 +1060,11 @@ def build_next_roster_lock():
             schedule[
                 "schedule_fetched_at"
             ]
+        ),
+        "schedule_source": (
+            schedule.get(
+                "schedule_source"
+            )
         ),
     }
 

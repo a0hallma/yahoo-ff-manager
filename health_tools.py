@@ -1,4 +1,4 @@
-import json
+﻿import json
 from collections import Counter
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -548,7 +548,7 @@ def build_data_health_report():
                 "NFL schedule source",
                 "WARN",
                 (
-                    "NFL.com fetch failed or was unavailable. "
+                    "Live NFL schedule fetch failed or was unavailable. "
                     "Using the last successful cached schedule."
                 ),
             )
@@ -559,7 +559,7 @@ def build_data_health_report():
                 "NFL schedule source",
                 "PASS",
                 (
-                    "Fresh NFL.com schedule retrieved "
+                    "Fresh NFL schedule retrieved "
                     "successfully."
                 ),
             )
