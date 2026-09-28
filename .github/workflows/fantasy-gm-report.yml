@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
   schedule:
-    - cron: '0 9 * * 4'
+    - cron: '0 8 * * 4'
       timezone: 'America/Detroit'
 
     - cron: '0 8 * * 0'
@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   fantasy-report:
-    name: Generate and email Fantasy GM report
+    name: Generate and email Fantasy GM reports
 
     runs-on: windows-latest
 
@@ -46,6 +46,7 @@ jobs:
         env:
           PYTHONUTF8: '1'
           PYTHONIOENCODING: utf-8
+
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 
           SLEEPER_LEAGUE_ID: ${{ vars.SLEEPER_LEAGUE_ID }}
@@ -63,11 +64,46 @@ jobs:
         run: |
           python .\email_report.py sleeper
 
-      - name: Upload report artifact
+      - name: Generate and email Yahoo report
+        if: always()
+        shell: pwsh
+        env:
+          PYTHONUTF8: '1'
+          PYTHONIOENCODING: utf-8
+
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
+          YAHOO_CLIENT_ID: ${{ secrets.YAHOO_CLIENT_ID }}
+          YAHOO_CLIENT_SECRET: ${{ secrets.YAHOO_CLIENT_SECRET }}
+          YAHOO_REFRESH_TOKEN: ${{ secrets.YAHOO_REFRESH_TOKEN }}
+          YAHOO_TEAM_KEY: ${{ vars.YAHOO_TEAM_KEY }}
+
+          SMTP_HOST: smtp.gmail.com
+          SMTP_PORT: '587'
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          SMTP_SECURITY: starttls
+
+          REPORT_FROM_EMAIL: ${{ secrets.REPORT_FROM_EMAIL }}
+          REPORT_TO_EMAIL: ${{ secrets.REPORT_TO_EMAIL }}
+
+        run: |
+          python .\email_report.py yahoo
+
+      - name: Upload Sleeper report artifact
         if: always()
         uses: actions/upload-artifact@v6
         with:
           name: sleeper-fantasy-report
-          path: artifacts/*.txt
+          path: artifacts/sleeper_fantasy_report_*.txt
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload Yahoo report artifact
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: yahoo-fantasy-report
+          path: artifacts/yahoo_fantasy_report_*.txt
           if-no-files-found: warn
           retention-days: 14
