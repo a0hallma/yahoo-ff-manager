@@ -1,10 +1,27 @@
 import os
+import xml.etree.ElementTree as ET
 
 import requests
 from dotenv import load_dotenv
 
 
-load_dotenv()
+# Explicit path avoids python-dotenv's stdin auto-discovery edge case.
+# In GitHub Actions the environment variables are already present, so
+# a missing local .env file is harmless.
+load_dotenv(
+    dotenv_path=".env",
+)
+
+# Local Windows TLS inspection can require the OS trust store.
+# GitHub-hosted runners do not require this dependency, so keep it
+# optional instead of making the Yahoo provider depend on it.
+try:
+    import truststore
+
+    truststore.inject_into_ssl()
+
+except ImportError:
+    pass
 
 
 YAHOO_API_BASE = (
@@ -57,7 +74,10 @@ class YahooFantasyClient:
             and self.refresh_token
         )
 
-    def _headers(self):
+    def _headers(
+        self,
+        accept,
+    ):
         if not self.access_token:
             raise RuntimeError(
                 "Yahoo has not been authenticated yet."
@@ -67,7 +87,7 @@ class YahooFantasyClient:
             "Authorization": (
                 f"Bearer {self.access_token}"
             ),
-            "Accept": "application/json",
+            "Accept": accept,
         }
 
     def _build_url(
@@ -79,73 +99,12 @@ class YahooFantasyClient:
             f"{path.lstrip('/')}"
         )
 
-    def _handle_response(
-        self,
-        response,
-    ):
-        if response.status_code == 401:
-            raise RuntimeError(
-                "Yahoo authentication failed or the "
-                "access token has expired."
-            )
-
-        try:
-            response.raise_for_status()
-
-        except requests.HTTPError as exc:
-            response_text = (
-                response.text[:500]
-                if response.text
-                else "No response body"
-            )
-
-            raise RuntimeError(
-                "Yahoo API request failed. "
-                f"HTTP {response.status_code}. "
-                f"Response: {response_text}"
-            ) from exc
-
-        try:
-            return response.json()
-
-        except ValueError as exc:
-            raise RuntimeError(
-                "Yahoo returned a response that was "
-                "not valid JSON."
-            ) from exc
-
-    def get(
-        self,
-        path,
-        params=None,
-    ):
-        url = self._build_url(
-            path
-        )
-
-        request_params = dict(
-            params or {}
-        )
-
-        request_params["format"] = "json"
-
-        response = self.session.get(
-            url,
-            headers=self._headers(),
-            params=request_params,
-            timeout=30,
-        )
-
-        return self._handle_response(
-            response
-        )
-
     def refresh_access_token(self):
         if not self.can_refresh:
             raise RuntimeError(
                 "Yahoo token refresh is not configured. "
-                "Client ID, client secret, and refresh "
-                "token are required."
+                "YAHOO_CLIENT_ID, YAHOO_CLIENT_SECRET, and "
+                "YAHOO_REFRESH_TOKEN are required."
             )
 
         response = self.session.post(
@@ -165,9 +124,16 @@ class YahooFantasyClient:
             response.raise_for_status()
 
         except requests.HTTPError as exc:
+            response_text = (
+                response.text[:500]
+                if response.text
+                else "No response body"
+            )
+
             raise RuntimeError(
                 "Yahoo access-token refresh failed. "
-                f"HTTP {response.status_code}."
+                f"HTTP {response.status_code}. "
+                f"Response: {response_text}"
             ) from exc
 
         try:
@@ -175,8 +141,7 @@ class YahooFantasyClient:
 
         except ValueError as exc:
             raise RuntimeError(
-                "Yahoo token refresh returned "
-                "invalid JSON."
+                "Yahoo token refresh returned invalid JSON."
             ) from exc
 
         new_access_token = token_data.get(
@@ -185,14 +150,16 @@ class YahooFantasyClient:
 
         if not new_access_token:
             raise RuntimeError(
-                "Yahoo token refresh succeeded but "
-                "did not return an access token."
+                "Yahoo token refresh succeeded but did not "
+                "return an access token."
             )
 
         self.access_token = (
             new_access_token
         )
 
+        # Yahoo may return a refresh token in the refresh response.
+        # Keep it for the current process, but never print it.
         if token_data.get(
             "refresh_token"
         ):
@@ -204,16 +171,274 @@ class YahooFantasyClient:
 
         return token_data
 
+    def ensure_authenticated(self):
+        """
+        Refresh before an unattended Fantasy GM run.
+
+        If refresh credentials are not present, an existing access
+        token may still be used for ad-hoc testing.
+        """
+
+        if self.can_refresh:
+            self.refresh_access_token()
+
+        elif not self.authenticated:
+            raise RuntimeError(
+                "Yahoo authentication is not configured. "
+                "Provide refresh credentials or an access token."
+            )
+
+        return True
+
+    def _get_response(
+        self,
+        path,
+        accept,
+        params=None,
+    ):
+        if not self.access_token:
+            self.ensure_authenticated()
+
+        url = self._build_url(
+            path
+        )
+
+        response = self.session.get(
+            url,
+            headers=self._headers(
+                accept
+            ),
+            params=(
+                dict(
+                    params or {}
+                )
+            ),
+            timeout=30,
+        )
+
+        # One safe retry handles an access token that expires between
+        # refresh and a later paginated request.
+        if (
+            response.status_code == 401
+            and self.can_refresh
+        ):
+            self.refresh_access_token()
+
+            response = self.session.get(
+                url,
+                headers=self._headers(
+                    accept
+                ),
+                params=(
+                    dict(
+                        params or {}
+                    )
+                ),
+                timeout=30,
+            )
+
+        try:
+            response.raise_for_status()
+
+        except requests.HTTPError as exc:
+            response_text = (
+                response.text[:1000]
+                if response.text
+                else "No response body"
+            )
+
+            raise RuntimeError(
+                "Yahoo API request failed. "
+                f"HTTP {response.status_code}. "
+                f"Path: {path}. "
+                f"Response: {response_text}"
+            ) from exc
+
+        return response
+
+    # ----------------------------------------------------------------
+    # JSON support retained for existing code.
+    # ----------------------------------------------------------------
+
+    def get(
+        self,
+        path,
+        params=None,
+    ):
+        request_params = dict(
+            params or {}
+        )
+
+        request_params["format"] = "json"
+
+        response = self._get_response(
+            path=path,
+            accept="application/json",
+            params=request_params,
+        )
+
+        try:
+            return response.json()
+
+        except ValueError as exc:
+            raise RuntimeError(
+                "Yahoo returned a response that was not valid JSON."
+            ) from exc
+
+    # ----------------------------------------------------------------
+    # XML support used by the live provider refresh.
+    #
+    # Yahoo's XML resource model maps cleanly to league/team/roster
+    # resources and avoids the irregular numeric-key structure of the
+    # JSON representation.
+    # ----------------------------------------------------------------
+
+    def get_xml(
+        self,
+        path,
+        params=None,
+    ):
+        response = self._get_response(
+            path=path,
+            accept="application/xml",
+            params=params,
+        )
+
+        try:
+            return ET.fromstring(
+                response.text
+            )
+
+        except ET.ParseError as exc:
+            raise RuntimeError(
+                "Yahoo returned a response that was not valid XML. "
+                f"Path: {path}."
+            ) from exc
+
+    def get_league_xml(
+        self,
+        league_key,
+    ):
+        if not league_key:
+            raise ValueError(
+                "league_key is required."
+            )
+
+        return self.get_xml(
+            f"league/{league_key}"
+        )
+
+    def get_league_settings_xml(
+        self,
+        league_key,
+    ):
+        if not league_key:
+            raise ValueError(
+                "league_key is required."
+            )
+
+        return self.get_xml(
+            f"league/{league_key}/settings"
+        )
+
+    def get_league_teams_xml(
+        self,
+        league_key,
+    ):
+        if not league_key:
+            raise ValueError(
+                "league_key is required."
+            )
+
+        return self.get_xml(
+            f"league/{league_key}/teams"
+        )
+
+    def get_team_roster_xml(
+        self,
+        team_key,
+        week=None,
+    ):
+        if not team_key:
+            raise ValueError(
+                "team_key is required."
+            )
+
+        path = (
+            f"team/{team_key}/roster"
+        )
+
+        if week is not None:
+            path += (
+                f";week={int(week)}"
+            )
+
+        return self.get_xml(
+            path
+        )
+
+    def get_league_players_xml(
+        self,
+        league_key,
+        status,
+        start=0,
+        count=25,
+    ):
+        """
+        Fetch a page of league-context players.
+
+        Yahoo's supported status filters include:
+          FA = free agents
+          W  = waivers
+          A  = all available
+          T  = taken
+        """
+
+        if not league_key:
+            raise ValueError(
+                "league_key is required."
+            )
+
+        status = str(
+            status
+        ).strip().upper()
+
+        if status not in {
+            "FA",
+            "W",
+            "A",
+            "T",
+        }:
+            raise ValueError(
+                f"Unsupported Yahoo player status filter: {status}"
+            )
+
+        if start < 0:
+            raise ValueError(
+                "start cannot be negative."
+            )
+
+        if count < 1:
+            raise ValueError(
+                "count must be at least 1."
+            )
+
+        path = (
+            f"league/{league_key}/players"
+            f";status={status}"
+            f";start={int(start)}"
+            f";count={int(count)}"
+        )
+
+        return self.get_xml(
+            path
+        )
+
+    # ----------------------------------------------------------------
+    # Existing raw JSON helpers retained.
+    # ----------------------------------------------------------------
+
     def get_my_nfl_leagues_raw(self):
-        """
-        Return the raw Yahoo response containing NFL
-        fantasy leagues associated with the authenticated
-        Yahoo account.
-
-        We will later use this to discover the Yahoo
-        league key instead of hard-coding it.
-        """
-
         return self.get(
             "users;use_login=1/"
             "games;game_codes=nfl/"
@@ -224,10 +449,6 @@ class YahooFantasyClient:
         self,
         league_key,
     ):
-        """
-        Return raw metadata for one Yahoo fantasy league.
-        """
-
         if not league_key:
             raise ValueError(
                 "league_key is required."
@@ -244,16 +465,6 @@ class YahooFantasyClient:
         start=0,
         count=25,
     ):
-        """
-        Return a raw Yahoo players collection for the
-        supplied league.
-
-        This method intentionally returns Yahoo's raw
-        response. Normalization into the Fantasy GM's
-        common available-player format will happen in a
-        separate layer.
-        """
-
         if not league_key:
             raise ValueError(
                 "league_key is required."
@@ -293,15 +504,6 @@ class YahooFantasyClient:
         start=0,
         count=25,
     ):
-        """
-        Return Yahoo's raw available-player collection.
-
-        Yahoo status=A is used for the available-player
-        pool. We will later normalize individual Yahoo
-        player availability into FA or W for the rest of
-        the Fantasy GM.
-        """
-
         return self.get_league_players_raw(
             league_key=league_key,
             status="A",

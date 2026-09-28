@@ -13,6 +13,7 @@ from provider_context import (
 DATA_DIR = Path(__file__).parent / "data"
 
 LEAGUE_ROSTER_FILES = {
+    "yahoo": DATA_DIR / "yahoo_league_rosters.json",
     "sleeper": DATA_DIR / "sleeper_league_rosters.json",
 }
 
@@ -22,10 +23,8 @@ def load_league_rosters():
     Load league-wide roster data for the currently selected
     fantasy provider.
 
-    Sleeper is currently supported.
-
-    Yahoo will be added once live Yahoo league-wide roster
-    data is available.
+    Yahoo and Sleeper are supported through provider-specific
+    league-wide roster snapshots.
     """
 
     provider = get_current_provider()
@@ -195,3 +194,4 @@ def get_league_roster_summary() -> str:
         build_league_roster_summary(),
         indent=2,
     )
+
